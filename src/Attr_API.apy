@@ -1,0 +1,425 @@
+create or replace package body Attr_API is
+
+  
+  TYPE IDX_TAB                IS TABLE OF PLS_INTEGER INDEX BY VARCHAR2(50);
+  TYPE IDX_HASH_TAB           IS TABLE OF IDX_TAB INDEX BY PLS_INTEGER;
+  
+  idx_hash_            IDX_HASH_TAB;
+  
+
+  FUNCTION  Get_Attr_Table ( attr_ IN XML_obj , name_ IN VARCHAR2) RETURN Attr_Tab PIPELINED IS
+  BEGIN
+      FOR r_ IN ( SELECT t.This() obj FROM table( attr_.Attr_Table( name_ )) t ) LOOP
+          PIPE ROW(r_.obj);
+      END LOOP;
+  END;
+
+  FUNCTION  Get_Attr_Table ( attr_ IN CLOB , name_ IN VARCHAR2) RETURN Attr_Tab PIPELINED IS
+      xml_ XML_obj;
+  BEGIN
+      xml_ := XML_Obj(NULL, '', '', '');
+      xml_.From_Clob( attr_ );
+      FOR r_ IN ( SELECT t.This() obj FROM table( xml_.Attr_Table( name_ )) t ) LOOP
+          PIPE ROW(r_.obj);
+      END LOOP;
+  END;
+
+  FUNCTION  Get_Attr_Table ( attr_ IN Attr_Obj, name_ IN VARCHAR2) RETURN Attr_Tab IS
+      tmp_    PLS_INTEGER;
+      type_   VARCHAR2(200);
+      tab_    attr_tab;
+      i_      PLS_INTEGER;
+  BEGIN
+      i_ := instr(name_, '/', -1);
+      IF i_ > 0 THEN
+          RETURN Get_Attr_Table( attr_.Get_Record( substr( name_, 1, i_-1 ) ), substr( name_, i_+1 ) );
+      ELSE
+          type_ := attr_.Get_Type( name_ );
+          IF type_ = 'TABLE' THEN
+              --tmp_ := attr_.Get_Anydata( name_ ).GetCollection( tab_ );
+              tmp_ := attr_.values_( attr_.Idx(name_ ) ).GetCollection( tab_ );
+          ELSIF type_ = 'RECORD' THEN
+              tab_ := attr_tab( attr_.Get_Record( name_ ) );
+          ELSIF type_ IS NULL THEN
+              DBMS_output.put_line( 'Record Not Found :'||name_ );
+          ELSE
+              DECLARE
+                  obj_    Attr_Obj;
+              BEGIN
+                  obj_ := Attr_Obj();
+                  obj_.Set_( name_, attr_.Get( name_ ) );
+                  tab_ := Attr_Tab(obj_);
+              END;
+          END IF;
+          RETURN tab_;
+      END IF;
+  END;
+
+
+  FUNCTION  Get_Attr_Table_( attr_ IN attr_obj, name_ IN VARCHAR2) RETURN Attr_Tab_ IS
+      tab_    Attr_Tab;
+      tab2_   Attr_Tab_;
+  BEGIN
+      tab_ := Get_Attr_Table ( attr_, name_  );
+      tab2_ := Attr_Tab_();
+      tab2_.Extend(tab_.count);
+      FOR i_ IN 1..tab_.count LOOP
+          tab2_(i_) := tab_(i_);
+      END LOOP;
+      RETURN tab2_;
+  END;
+
+  PROCEDURE Add_Attr_Table( attr_ IN OUT NOCOPY attr_obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY attr_tab) IS
+      data_       anydata;
+  BEGIN
+      data_ := ANYDATA.ConvertCollection(value_);
+      attr_.Add_( name_, data_ );
+  END;
+
+  PROCEDURE Add_Attr_Table ( attr_ IN OUT NOCOPY attr_obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Tab_) IS
+      attr_tab_   Attr_Tab;
+  BEGIN
+      attr_tab_ := Attr_Tab();
+      attr_tab_.Extend(value_.count);
+      FOR i_ IN 1..value_.count LOOP
+          attr_tab_(i_) := value_(i_);
+      END LOOP;
+      Add_Attr_Table( attr_, name_, attr_tab_ );
+  END;
+
+
+  PROCEDURE Set_Attr_Table( attr_ IN OUT NOCOPY attr_obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY attr_tab) IS
+      idx_        PLS_INTEGER;
+      data_       anydata;
+  BEGIN
+      idx_ := attr_.Idx( name_ );
+      IF idx_ IS NULL THEN
+          Add_Attr_Table( attr_, name_, value_ );
+      ELSE
+          data_ := ANYDATA.ConvertCollection(value_);
+          attr_.Set_( name_, data_ );
+      END IF;
+  END;
+
+  PROCEDURE Set_Attr_Table ( attr_ IN OUT NOCOPY attr_obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Tab_) IS
+      attr_tab_   Attr_Tab;
+  BEGIN
+      attr_tab_ := Attr_Tab();
+      attr_tab_.Extend(value_.count);
+      FOR i_ IN 1..value_.count LOOP
+          attr_tab_(i_) := value_(i_);
+      END LOOP;
+      Set_Attr_Table( attr_, name_, attr_tab_ );
+  END;
+   
+   PROCEDURE Clear_All_Cache IS
+   BEGIN
+       idx_hash_.delete;
+   END;
+   
+   FUNCTION Create_Idx_Cache( names_ IN OUT NOCOPY string_tab          ) RETURN PLS_INTEGER IS  -- return hash_cache_id_
+       hash_string_ VARCHAR2(32767);
+       hash_        NUMBER;
+       idx_tab_     IDX_TAB; 
+   BEGIN
+       FOR i IN 1..names_.count LOOP
+           hash_string_ := hash_string_||'#'||names_(i);
+           IF names_(i) IS NOT NULL THEN
+               idx_tab_( names_(i) ) := i;
+           END IF;
+       END LOOP;
+       hash_ := DBMS_UTILITY.GET_HASH_VALUE( hash_string_, 2, 268435456);
+       idx_hash_( hash_ ) := idx_tab_;
+       RETURN hash_;
+   END;
+   
+   FUNCTION Create_Idx_Cache( names_ IN OUT NOCOPY name_tab          ) RETURN PLS_INTEGER IS  -- return hash_cache_id_
+       hash_string_ VARCHAR2(32767);
+       hash_        NUMBER;
+       idx_tab_     IDX_TAB; 
+   BEGIN
+       FOR i IN 1..names_.count LOOP
+           hash_string_ := hash_string_||'#'||names_(i);
+           IF names_(i) IS NOT NULL THEN
+               idx_tab_( names_(i) ) := i;
+           END IF;
+       END LOOP;
+       hash_ := DBMS_UTILITY.GET_HASH_VALUE( hash_string_, 2, 268435456);
+       idx_hash_( hash_ ) := idx_tab_;
+       RETURN hash_;
+   END;
+   
+   FUNCTION Idx_Cache       ( hash_ IN NUMBER, name_ IN VARCHAR2 ) RETURN PLS_INTEGER IS
+   BEGIN
+       RETURN idx_hash_( hash_ )(name_);
+   END;
+   
+   -----------------------------------------------------------------------
+   
+  FUNCTION Attr  RETURN Attr_Obj IS
+  BEGIN
+      RETURN Attr_Obj();
+  END;
+  
+  FUNCTION AttrS RETURN AttrS_Obj IS
+  BEGIN
+      RETURN AttrS_Obj();
+  END;
+
+  FUNCTION AttrTab  RETURN Attr_Tab IS
+  BEGIN
+      RETURN Attr_Tab();
+  END;
+
+   
+  PROCEDURE Add_Row( tab_ IN OUT NOCOPY Attr_Tab, attr_ IN OUT NOCOPY Attr_Obj) IS
+  BEGIN
+      tab_.Extend( 1 );
+      tab_( tab_.count ) := attr_;
+  END;
+   
+   
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN VARCHAR2) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+  
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN NUMBER) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN DATE) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY CLOB) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY BLOB) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Obj) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Tab) IS
+  BEGIN
+      Add_Attr_Table( attr_, name_, value_ );
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Tab_) IS
+  BEGIN
+      Add_Attr_Table( attr_, name_, value_ );
+  END;
+
+  ---------
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN VARCHAR2) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+  
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN NUMBER) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN DATE) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY CLOB) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY BLOB) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Obj) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Tab) IS
+  BEGIN
+      Set_Attr_Table( attr_, name_, value_ );
+  END;
+
+  PROCEDURE Set( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Tab_) IS
+  BEGIN
+      Set_Attr_Table( attr_, name_, value_ );
+  END;
+   
+  ---------
+
+  FUNCTION Get        ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER)RETURN VARCHAR2 IS
+  BEGIN
+      RETURN attr_.Get( idx_ );
+  END;
+  
+  FUNCTION Get        ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN VARCHAR2 IS
+  BEGIN
+      RETURN attr_.Get( name_ );
+  END;
+  
+  FUNCTION GetN       ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER)RETURN NUMBER is
+  begin
+      return attr_.GetN( idx_ );
+  end;
+  
+  FUNCTION GetN       ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN NUMBER is
+  begin
+      return attr_.GetN( name_ );
+  end;
+  
+  FUNCTION GetD       ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER)RETURN DATE is
+  begin
+      return attr_.GetD( idx_ );
+  end;
+  
+  FUNCTION GetD       ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN DATE is
+  begin
+      return attr_.GetD( name_ );
+  end;
+  
+  FUNCTION GetT       ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER)RETURN DATE is
+  begin
+      return attr_.GetT( idx_ );
+  end;
+  
+  FUNCTION GetT       ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN DATE is
+  begin
+      return attr_.GetT( name_ );
+  end;
+  
+  FUNCTION GetCLob    ( attr_ IN Attr_Obj, idx_ IN PLS_INTEGER) RETURN CLOB is
+  begin
+      return attr_.GetCLob( idx_ );
+  end;
+  
+  FUNCTION GetCLob    ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN CLOB is
+  begin
+      return attr_.GetCLob( name_ );
+  end;
+  
+  FUNCTION GetBLob    ( attr_ IN Attr_Obj, idx_ IN PLS_INTEGER) RETURN BLOB is
+  begin
+      return attr_.GetBLob( idx_ );
+  end;
+  
+  FUNCTION GetBLob    ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN BLOB is
+  begin
+      return attr_.GetBLob( name_ );
+  end;
+  
+  FUNCTION Get_Record ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER)RETURN Attr_Obj is
+  begin
+      return attr_.Get_Record( idx_ );
+  end;
+  
+  FUNCTION Get_Record ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN Attr_Obj is
+  begin
+      return attr_.Get_Record( name_ );
+  end;
+  
+  FUNCTION Get_Table  ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER)RETURN Attr_Tab is
+  begin
+      return Get_Attr_Table( attr_, attr_.names_(idx_) );
+  end;
+  
+  FUNCTION Get_Table  ( attr_ IN Attr_Obj, name_ IN VARCHAR2)   RETURN Attr_Tab is
+  begin
+      return Get_Attr_Table( attr_, name_ );
+  end;
+  
+
+  PROCEDURE Del( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2) is
+  begin
+      attr_.Del( name_ );
+  end;
+  
+  PROCEDURE Del( attr_ IN OUT NOCOPY Attr_Obj, idx_  IN PLS_INTEGER) is
+  begin
+      attr_.Del( idx_ );
+  end;
+  
+  PROCEDURE Clear( attr_ IN OUT NOCOPY Attr_Obj ) IS
+  BEGIN
+      attr_.Clear();
+  END;
+
+  FUNCTION Get_Type   ( attr_ IN Attr_Obj, name_ IN VARCHAR2   ) RETURN VARCHAR2 is
+  begin
+      return attr_.Get_Type( name_ );
+  end;
+  
+  FUNCTION Get_Type   ( attr_ IN Attr_Obj, idx_  IN PLS_INTEGER) RETURN VARCHAR2 is
+  begin
+      return attr_.Get_Type( idx_ );
+  end;
+  
+  FUNCTION  Idx       ( attr_ IN Attr_Obj, name_ IN VARCHAR2 ) RETURN PLS_INTEGER IS
+  BEGIN
+      RETURN attr_.Idx(name_);
+  END;
+
+  PROCEDURE Add( attr_ IN OUT NOCOPY AttrS_Obj, name_ IN VARCHAR2, value_ IN VARCHAR2) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+  
+  PROCEDURE SET( attr_ IN OUT NOCOPY AttrS_Obj, name_ IN VARCHAR2, value_ IN VARCHAR2) IS
+  BEGIN
+      attr_.Set_( name_, value_ );
+  END;
+
+  PROCEDURE Del( attr_ IN OUT NOCOPY AttrS_Obj, name_ IN VARCHAR2) IS
+  BEGIN
+      attr_.Del( name_);
+  END;
+
+  PROCEDURE Del( attr_ IN OUT NOCOPY AttrS_Obj, idx_  IN PLS_INTEGER) IS
+  BEGIN
+      attr_.Del( idx_ );
+  END;
+
+  PROCEDURE Clear( attr_ IN OUT NOCOPY AttrS_Obj ) IS
+  BEGIN
+      attr_.Clear();
+  END;
+
+
+  FUNCTION Get        ( attr_ IN AttrS_Obj, idx_  IN PLS_INTEGER) RETURN VARCHAR2 IS
+  BEGIN
+      RETURN attr_.Get( idx_ );
+  END;
+  
+  FUNCTION Get        ( attr_ IN AttrS_Obj, name_ IN VARCHAR2)    RETURN VARCHAR2 IS
+  BEGIN
+      RETURN attr_.Get( name_ );
+  END;
+
+  FUNCTION Idx        ( attr_ IN AttrS_Obj, name_ IN VARCHAR2 ) RETURN PLS_INTEGER IS
+  BEGIN
+      RETURN attr_.Idx( name_ );
+  END;
+
+  FUNCTION Get_Record ( xml_ IN OUT NOCOPY Xml_Obj, path_ IN VARCHAR2)   RETURN Attr_Obj IS
+  BEGIN
+      RETURN xml_.Attr_Record( path_ );
+  END;
+
+
+end Attr_API;
+/

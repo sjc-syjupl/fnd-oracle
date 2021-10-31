@@ -1,0 +1,1494 @@
+create or replace package body FND_CREATE_PACKAGE_API  IS
+  ln_                VARCHAR2(2) := chr(13)||chr(10);
+  package_user_id_   VARCHAR2(50);
+
+  TYPE table_col_info_rec_type IS RECORD(
+      column_name VARCHAR2(30),
+      data_type   VARCHAR2(30),
+      length      NUMBER,
+      nullable    VARCHAR2(1),
+      index_pri   VARCHAR2(1),
+      attr        FND_Api.DIC
+  );
+  TYPE table_col_info_type IS TABLE OF table_col_info_rec_type INDEX BY PLS_INTEGER;
+
+  TYPE table_ind_info_rec_type IS RECORD(
+      column_name VARCHAR2(30),
+      data_type   VARCHAR2(30)
+  );
+  TYPE table_ind_info_type IS TABLE OF table_ind_info_rec_type INDEX BY PLS_INTEGER;
+
+  FUNCTION rpad2( str_ IN VARCHAR2, len_ IN NUMBER ) RETURN VARCHAR2 IS
+  BEGIN
+     IF length(str_) > len_ THEN
+         RETURN str_;
+     END IF;
+     RETURN rpad( str_, len_ );
+  END;
+
+  FUNCTION Get_Table_Ind_Info( table_name_ IN VARCHAR2 ) RETURN table_Ind_info_type IS
+      info_    table_Ind_info_type;
+
+      CURSOR get_info( table_name_ IN VARCHAR2 ) IS
+      SELECT ind.column_name, col.data_type
+        FROM user_ind_columns ind,
+             user_tab_columns col
+       WHERE ind.table_name = table_name_
+         AND ind.index_name LIKE '%_PK'
+         AND ind.table_name = col.table_name
+         AND ind.column_name = col.column_name
+       ORDER BY column_position;
+  BEGIN
+      OPEN get_info( upper(table_name_) );
+      FETCH get_info BULK COLLECT INTO info_;
+      CLOSE get_info;
+      RETURN info_;
+  END;
+
+  FUNCTION Get_Table_Col_Info( table_name_ IN VARCHAR2 ) RETURN table_col_info_type IS
+      ind_info_  table_Ind_info_type;
+      info_      table_col_info_type;
+      attr_      FND_Api.DIC;
+
+      CURSOR get_info( table_name_ IN VARCHAR2 ) IS
+      SELECT tab.COLUMN_NAME,
+             tab.DATA_TYPE,
+             tab.CHAR_LENGTH,
+             tab.NULLABLE,
+             com.comments
+      FROM user_tab_columns tab,
+           user_col_comments COM
+      WHERE tab.table_name = table_name_
+        AND tab.table_name = com.table_name
+        AND tab.column_name = com.column_name
+      ORDER BY tab.COLUMN_ID;
+
+      TYPE get_info_type IS TABLE OF get_info%ROWTYPE;
+      tmp_info_          get_info_type;
+
+      PROCEDURE Get_Ref_( column_name_ IN VARCHAR2 ) IS
+         ref_       VARCHAR2(200);
+         package_   VARCHAR2(200);
+         parameter_ VARCHAR2(200);
+         i_         NUMBER;
+      BEGIN
+         ref_ := upper(TRIM( attr_('REF') ));
+         i_ := instr(ref_,'(');
+         IF i_ > 0 THEN
+             package_ := substr( ref_, 1,  i_-1 );
+             parameter_ := substr( ref_, i_ );
+         ELSE
+             package_ := ref_;
+             parameter_ := '(' || column_name_ || ')';
+         END IF;
+         package_ := TRIM(package_);
+
+         IF package_ LIKE '%_API' THEN
+             NULL;
+         ELSIF package_ LIKE '%_TAB' THEN
+             package_ := substr(package_, 1, length(package_)-4) || '_APT';
+         ELSE
+             package_ := package_ || '_APT';
+         END IF;
+         attr_('REF') := package_;
+         attr_('REF_PARAM') := parameter_;
+      END;
+  BEGIN
+      ind_info_ := Get_Table_Ind_Info( table_name_ );
+      OPEN get_info( upper(table_name_) );
+      FETCH get_info BULK COLLECT INTO tmp_info_;
+      CLOSE get_info;
+
+      FOR i_ IN tmp_info_.first..tmp_info_.last LOOP
+         info_(i_).column_name := tmp_info_(i_).column_name;
+         info_(i_).data_type := tmp_info_(i_).data_type;
+         info_(i_).length := tmp_info_(i_).char_length;
+         info_(i_).nullable := tmp_info_(i_).nullable;
+         info_(i_).index_pri := 'N';
+         FOR j_ IN nvl(ind_info_.first,1)..nvl(ind_info_.last,-1) LOOP
+             IF info_(i_).column_name = ind_info_(j_).column_name THEN
+                 info_(i_).index_pri := 'Y';
+                 EXIT;
+             END IF;
+         END LOOP;
+         attr_ := FND_Api.Split_Dic( tmp_info_(i_).comments, '^', '=' );
+         IF attr_.exists('REF') THEN
+             Get_Ref_( info_(i_).column_name );
+         END IF;
+         info_(i_).attr := attr_;
+      END LOOP;
+
+      RETURN info_;
+  END;
+
+  FUNCTION Text_View( table_name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+      text_    VARCHAR2(32600);
+      info_    table_col_info_type;
+      prefix_  VARCHAR2(50);
+      attr_    FND_Api.DIC;
+      tmp1_    FND_Api.List;
+      tmp2_    FND_Api.List;
+      name_    VARCHAR2(50);
+
+  BEGIN
+      info_ := Get_Table_Col_Info( table_name_ );
+      text_ := '';
+      text_ := text_ || 'CREATE OR REPLACE VIEW ' || package_user_id_ || substr(table_name_, 1, length(table_name_)-4) ||' AS '||ln_;
+      text_ := text_ || 'SELECT ';
+      prefix_ := '';
+      FOR i_ IN info_.first..info_.last LOOP
+          IF info_(i_).column_name = 'ROWVERSION' THEN
+              text_ := text_ || prefix_ || 'TO_CHAR(ROWVERSION,''YYYY-MM-DD-HH24.MI.SS'') ROWVERSION,' || ln_;
+          ELSE
+              text_ := text_ || prefix_ || info_(i_).column_name || ',' || ln_;
+          END IF;
+          attr_ := info_(i_).attr;
+          IF attr_.exists('REF') AND attr_.exists('VIEW') THEN
+              tmp1_ := FND_Api.Split( attr_('VIEW'), ';' );
+              FOR j_ IN tmp1_.first..tmp1_.last LOOP
+                  tmp2_ := FND_Api.Split( tmp1_(j_), ':' );
+                  IF tmp2_.count = 1 THEN
+                      name_ := info_(i_).attr('REF');
+                      name_ := substr(name_, 1, length(name_)-3) || '__' || info_(i_).column_name;
+                  ELSE
+                      name_ := tmp2_(2);
+                  END IF;
+                  text_ := text_ || prefix_ || attr_('REF') || '.Get_' || tmp2_(1) || attr_('REF_PARAM') ||' '|| name_||','|| ln_;
+              END LOOP;
+          END IF;
+          prefix_ := '       ';
+      END LOOP;
+      text_ := text_ || prefix_ || 'ROWID  objid'||ln_;
+      text_ := text_ || 'FROM ' || table_name_ ||ln_;
+      text_ := text_ || 'WITH read only ';
+
+      RETURN text_;
+  END;
+
+  FUNCTION Text_Trigger( table_name_ IN VARCHAR2 ) RETURN CLOB IS
+      trigger_name_    VARCHAR2(35);
+      sequences_name_  VARCHAR2(35);
+      text_            CLOB;
+  BEGIN
+      trigger_name_ := substr(table_name_, 1, length(table_name_)-4 )||'_TR';
+      sequences_name_ := substr(table_name_, 1, length(table_name_)-4 )||'_SEQ';
+      text_ :=
+'
+CREATE OR REPLACE TRIGGER '|| trigger_name_ ||' BEFORE INSERT ON '||table_name_||' FOR EACH ROW WHEN (new.id IS NULL)
+DECLARE
+BEGIN
+  SELECT '||sequences_name_||'.nextval INTO :new.id FROM DUAL;
+END;
+';
+       RETURN text_;
+  END;
+  
+
+  FUNCTION Text_APT( table_name_ IN VARCHAR2 ) RETURN CLOB IS
+      ind_param_str_    VARCHAR(2000);
+      ind_argument_str_ VARCHAR(2000);
+      ind_where_str_    VARCHAR(2000);
+      col_info_         table_col_info_type;
+      ind_info_         table_ind_info_type;
+      package_          VARCHAR(50);
+      text_             CLOB;
+      all_coll_param_   VARCHAR2(32600);
+
+  BEGIN
+      package_ := upper(table_name_);
+      package_ := substr(package_, 1, length(package_)-4 );
+      col_info_ := Get_Table_Col_Info( table_name_ );
+      ind_info_ := Get_Table_Ind_Info( table_name_ );
+
+      ind_param_str_ := '';
+      ind_argument_str_ := '';
+      ind_where_str_ := '';
+      FOR i_ IN nvl(ind_info_.first,1)..nvl(ind_info_.last,-1) LOOP
+          IF i_ != ind_info_.first THEN
+              ind_param_str_ := ind_param_str_ || ', ';
+              ind_argument_str_ := ind_argument_str_ ||', ';
+              ind_where_str_ := ind_where_str_ ||' AND ';
+          END IF;
+          ind_param_str_ := lower(ind_param_str_|| ind_info_(i_).column_name) || '_ IN ' || package_ ||'.'||ind_info_(i_).column_name||'%TYPE';
+          ind_argument_str_ := ind_argument_str_ || lower(ind_info_(i_).column_name) || '_';
+          ind_where_str_ := ind_where_str_ || lower(ind_info_(i_).column_name) || ' = ' || lower(ind_info_(i_).column_name) || '_';
+      END LOOP;
+      IF ind_param_str_ IS NULL THEN
+          ind_param_str_ := 'id_ IN NUMBER';
+          ind_argument_str_ := 'id_';
+          ind_where_str_ := 'id = id_';
+      END IF;
+
+      all_coll_param_ := '';
+      FOR i_ IN col_info_.first..col_info_.last LOOP
+          IF col_info_(i_).column_name != 'ROWVERSION' THEN
+             IF i_ != col_info_.first THEN
+                 all_coll_param_ := all_coll_param_ || ',' || ln_;
+             END IF;
+             all_coll_param_ := all_coll_param_ || '                       ' || rpad2(lower(col_info_(i_).column_name)||'_', 25) || ' IN %PACKAGE%.' || col_info_(i_).column_name || '%TYPE DEFAULT NULL';
+          END IF;
+      END LOOP;
+
+
+text_ :=
+'
+CREATE OR REPLACE PACKAGE '|| package_user_id_ ||'%PACKAGE%_APT IS
+
+    TYPE REC IS RECORD(
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        text_ := text_ ||'       '||rpad2(lower(col_info_(i_).column_name),32)||' %PACKAGE%_TAB.'||col_info_(i_).column_name||'%TYPE';
+        IF i_ != col_info_.last THEN
+            text_ := text_ ||','||ln_;
+        END IF;
+    END LOOP;
+
+text_ := TEXT_ ||
+'    );
+    TYPE REC_TABLE IS TABLE OF REC INDEX BY PLS_INTEGER;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   EXIST  ------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    FUNCTION  Exist      ( %IND_PARAM% ) RETURN BOOLEAN;
+    FUNCTION  Exist_Str  ( %IND_PARAM% ) RETURN VARCHAR2; --Y/N
+    PROCEDURE Check_Exist( %IND_PARAM% );
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   GET RECORD --------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    FUNCTION Get     ( %IND_PARAM% ) RETURN REC;
+    FUNCTION Get_View( %IND_PARAM% ) RETURN %PACKAGE%%ROWTYPE;
+    FUNCTION Get_Rec ( '||ln_||all_coll_param_||' ) RETURN REC;  -- one (first) record
+    FUNCTION Get_Recs( '||ln_||all_coll_param_||' ) RETURN REC_TABLE;  -- table with records
+
+
+
+  --------------------------------------------------------------------------------------------------------------
+  -------------------------------   NEW / MODIFY / REMOVE  -----------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    PROCEDURE CRUD         ( type_    IN VARCHAR2, rec_ IN OUT NOCOPY REC );  --type_  in (Add, Update, Delete)
+    PROCEDURE New          ( new_rec_ IN OUT NOCOPY REC );
+    PROCEDURE Modify       ( new_rec_ IN OUT NOCOPY REC );
+    PROCEDURE New_Or_Modify( new_rec_ IN OUT NOCOPY REC );
+    PROCEDURE Remove       ( rem_rec_ IN OUT NOCOPY REC );
+    PROCEDURE Remove       ( %IND_PARAM% );
+
+    PROCEDURE New ( ';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).column_name != 'ROWVERSION' THEN
+            IF i_ != col_info_.first THEN
+                text_ := text_ || ', '||ln_||'                    ';
+            END IF;
+            text_ := text_ || REPLACE(REPLACE(
+                              '%COLUMN_% IN %PACKAGE%.%COLUMN%%TYPE DEFAULT NULL', 
+                              '%COLUMN_%',  rpad(col_info_(i_).column_name||'_', 32)),
+                              '%COLUMN%',  col_info_(i_).column_name);
+        END IF;
+    END LOOP;
+    text_ := text_ || ' );'  || ln_;
+
+
+/*
+    text_ := text_ ||
+'
+
+    PROCEDURE Clear_Rec         ( rec_ IN OUT NOCOPY REC );
+    PROCEDURE Clear_With_Default( rec_ IN OUT NOCOPY REC );
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   LOG  --------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    PROCEDURE Log     ( rec_     IN OUT NOCOPY REC);
+    PROCEDURE Log_Diff( old_rec_ IN OUT NOCOPY REC, new_rec_ IN OUT NOCOPY REC);
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   GET / SET  --------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION  Get_Value ( column_name_ IN VARCHAR2,'||ln_||all_coll_param_||' ) RETURN VARCHAR2;
+  FUNCTION  Get_Value_Number ( column_name_ IN VARCHAR2,'||ln_||all_coll_param_||' ) RETURN NUMBER;
+  FUNCTION  Get_Value_Date ( column_name_ IN VARCHAR2,'||ln_||all_coll_param_||' ) RETURN DATE;
+
+  PROCEDURE Set_Value ( column_name_ IN VARCHAR2, set_value_ IN VARCHAR2,'||ln_||all_coll_param_||' );
+  PROCEDURE Set_Value ( column_name_ IN VARCHAR2, set_value_ IN NUMBER,'||ln_||all_coll_param_||' );
+  PROCEDURE Set_Value ( column_name_ IN VARCHAR2, set_value_ IN DATE,'||ln_||all_coll_param_||' );
+
+';
+*/
+/*
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).index_pri = 'N' AND col_info_(i_).column_name != 'ROWVERSION' THEN
+            text_ := text_ || REPLACE(REPLACE(REPLACE(
+'
+    FUNCTION  Get_%Column%( '||ln_||all_coll_param_||' ) RETURN %PACKAGE%.%COLUMN%%TYPE;
+    PROCEDURE Set_%Column%( set_value_ IN %PACKAGE%.%COLUMN%%TYPE, '||ln_||all_coll_param_||' );
+
+'
+            , '%COLUMN%', col_info_(i_).column_name), '%Column%', Initcap(col_info_(i_).column_name)), '%column%', lower(col_info_(i_).column_name) );
+        END IF;
+    END LOOP;
+*/
+    text_ := text_ ||
+'
+/*
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   EXAMPLES  ---------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+
+
+SELECT ';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).column_name != 'ROWVERSION' THEN
+                IF i_ != col_info_.first THEN
+                    text_ := text_ || ','||ln_||'       ';
+                END IF;
+                text_ := text_ || rpad(col_info_(i_).column_name,30)||' "'||col_info_(i_).column_name||'"';
+            END IF;
+        END LOOP;
+text_ := text_ ||'
+FROM IFSAPP.%PACKAGE%
+
+DECLARE
+    rec_   IFSAPP.%PACKAGE%_APT.REC;
+BEGIN
+    rec_ := IFSAPP.%PACKAGE%_APT.Get_Rec( '||lower(col_info_(2).column_name)||'_ => ''cos'', '||lower(col_info_(3).column_name)||'_ => ''cos2'' );
+';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).column_name != 'ROWVERSION' THEN
+                text_ := text_ || REPLACE('    rec_.%COLUMN% := :%COLUMN%;'||ln_, '%COLUMN%', col_info_(i_).column_name);
+            END IF;
+        END LOOP;
+text_ := text_ ||
+'    rec_.ROWVERSION := IFSAPP.FND_Api.Str_To_Date(:ROWVERSION);
+    IFSAPP.%PACKAGE%_APT.CRUD( :Type, rec_ );
+END;
+
+
+DECLARE
+    rec_   IFSAPP.%PACKAGE%_APT.REC;
+BEGIN
+    rec_ := IFSAPP.%PACKAGE%_APT.Get_Rec( '||lower(col_info_(2).column_name)||'_ => ''cos'', '||lower(col_info_(3).column_name)||'_ => ''cos2'' );
+';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF i_ > 1 AND  col_info_(i_).column_name != 'ROWVERSION' THEN
+                text_ := text_ || REPLACE('    rec_.%COLUMN% := :%COLUMN%;'||ln_, '%COLUMN%', col_info_(i_).column_name);
+            END IF;
+        END LOOP;
+text_ := text_ ||
+'    IFSAPP.%PACKAGE%_APT.New_Or_Modify( rec_ );
+END;
+
+*/
+
+END %PACKAGE%_APT;
+';
+      text_ := REPLACE(REPLACE(REPLACE(REPLACE(REPLACE( text_, '%PACKAGE%', package_), '%IND_PARAM%', ind_param_str_ ),
+                   '%IND_WHERE%', ind_where_str_ ), '%IND_ARG%', ind_argument_str_ ), '%IND_FIRST%', CASE WHEN ind_info_.first IS NULL THEN 'ID' ELSE ind_info_(1).column_name END );
+      RETURN text_;
+  END;
+
+  FUNCTION Text_APT_Body( table_name_ IN VARCHAR2 ) RETURN CLOB IS
+      ind_param_str_    VARCHAR(2000);
+      ind_argument_str_ VARCHAR(2000);
+      ind_where_str_    VARCHAR(2000);
+      col_info_         table_col_info_type;
+      ind_info_         table_ind_info_type;
+      package_          VARCHAR(50);
+      text_             CLOB;
+      param_            VARCHAR2(200);
+      all_coll_param_   VARCHAR2(32000);
+      all_coll_value_   VARCHAR2(32000);
+      found_            BOOLEAN;
+      prec_prefix_      VARCHAR2(200);
+      prec_suffix_      VARCHAR2(200);
+
+  BEGIN
+      package_ := upper(table_name_);
+      package_ := substr(package_, 1, length(package_)-4 );
+      col_info_ := Get_Table_Col_Info( table_name_ );
+      ind_info_ := Get_Table_Ind_Info( table_name_ );
+
+      ind_param_str_ := '';
+      ind_argument_str_ := '';
+      ind_where_str_ := '';
+      FOR i_ IN nvl(ind_info_.first,1)..nvl(ind_info_.last,-1) LOOP
+          IF i_ != ind_info_.first THEN
+              ind_param_str_ := ind_param_str_ || ', ';
+              ind_argument_str_ := ind_argument_str_ ||', ';
+              ind_where_str_ := ind_where_str_ ||' AND ';
+          END IF;
+          ind_param_str_ := ind_param_str_|| ind_info_(i_).column_name || '_ IN ' || package_ ||'.'||ind_info_(i_).column_name||'%TYPE';
+          ind_argument_str_ := ind_argument_str_ || ind_info_(i_).column_name || '_';
+          ind_where_str_ := ind_where_str_ || ind_info_(i_).column_name || ' = ' || ind_info_(i_).column_name || '_';
+      END LOOP;
+      IF ind_param_str_ IS NULL THEN
+          ind_param_str_ := 'id_ IN NUMBER';
+          ind_argument_str_ := 'id_';
+          ind_where_str_ := 'id = id_';
+      END IF;
+
+      all_coll_param_ := '';
+      all_coll_value_ := '';
+      FOR i_ IN col_info_.first..col_info_.last LOOP
+          IF col_info_(i_).column_name != 'ROWVERSION' THEN
+             IF i_ != col_info_.first THEN
+                 all_coll_param_ := all_coll_param_ || ',' || ln_;
+                 all_coll_value_ := all_coll_value_ || ',' || ln_;
+             END IF;
+             all_coll_param_ := all_coll_param_ || '                       ' || rpad2(lower(col_info_(i_).column_name)||'_', 25) || ' IN %PACKAGE%.' || col_info_(i_).column_name || '%TYPE DEFAULT NULL';
+             all_coll_value_ := all_coll_value_ || '                       ' || lower(col_info_(i_).column_name)||'_ => ' || lower(col_info_(i_).column_name)||'_';
+          END IF;
+      END LOOP;
+
+text_ :=
+'
+CREATE OR REPLACE PACKAGE BODY '|| package_user_id_ ||'%PACKAGE%_APT IS
+   
+  PROCEDURE Log( rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Log_Diff( old_rec_ IN OUT NOCOPY REC, new_rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL);
+
+  --------------------------------------------------------------------------------------------------------------
+  ---------------------------------------------   EXIST   ------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION  Exist     ( %IND_PARAM% ) RETURN BOOLEAN IS
+     value_ NUMBER;
+
+     CURSOR get_ IS
+     SELECT 1
+       FROM %PACKAGE%_TAB
+      WHERE %IND_WHERE%;
+  BEGIN
+     OPEN get_;
+     FETCH get_ INTO value_;
+     CLOSE get_;
+     RETURN VALUE_ IS NOT NULL;
+  END;
+
+  FUNCTION  Exist_Str  ( %IND_PARAM% ) RETURN VARCHAR2 IS --Y/N
+  BEGIN
+      IF Exist( %IND_ARG% ) THEN
+          RETURN ''Y'';
+      END IF;
+      RETURN ''N'';
+  END;
+
+  PROCEDURE Check_Exist( %IND_PARAM% ) IS
+  BEGIN
+      IF NOT Exist( %IND_ARG% ) THEN
+          Error_Api.Record_Not_Exist( ''%PACKAGE%_API'', %IND_ARG% );
+      END IF;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   ROWID_AND_LOCK  ---------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION Get_Rowid_And_Lock( rec_ IN OUT NOCOPY REC ) RETURN ROWID IS
+     rowid_ ROWID;
+
+     CURSOR get_ IS
+     SELECT ROWID
+       FROM %PACKAGE%_TAB
+      WHERE ';
+    FOR i_ IN nvl(ind_info_.first,1)..nvl(ind_info_.last,-1) LOOP
+        IF i_ != ind_info_.first THEN
+           text_ := text_ || ' AND ';
+        END IF;
+        text_ := text_ || ind_info_(i_).column_name || ' = ' || 'rec_.' || ind_info_(i_).column_name ;
+    END LOOP;
+    IF ind_info_.first IS NULL THEN
+        text_ := text_ || 'id = rec_.id';
+    END IF;
+text_ := text_ || '
+        FOR UPDATE WAIT 15;
+  BEGIN
+     IF rec_.%IND_FIRST% IS NULL THEN
+         Error_Api.Record_Not_Exist( ''%PACKAGE%_API'', rec_.%IND_FIRST% );
+     END IF;
+     BEGIN
+         OPEN get_;
+         FETCH get_ INTO rowid_;
+         CLOSE get_;
+     EXCEPTION WHEN OTHERS THEN
+         Error_Api.Record_Locked( ''%PACKAGE%_API'', rec_.%IND_FIRST% );
+     END;
+     IF rowid_ IS NULL THEN
+         Error_Api.Record_Not_Exist( ''%PACKAGE%_API'', rec_.%IND_FIRST% );
+     END IF;
+     RETURN rowid_;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   CLEAR/DEFAULT  ----------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Add_Default( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+';
+    found_ := FALSE;
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).attr.exists('DEFAULT') THEN
+            text_ := text_ || '     IF rec_.'||col_info_(i_).column_name||' IS NULL THEN REC_.'|| col_info_(i_).column_name ||' := '''||col_info_(i_).attr('DEFAULT') ||'''; END IF;'||ln_;
+            found_ := TRUE;
+        END IF;
+    END LOOP;
+    IF NOT found_ THEN
+        text_ := text_ ||'     NULL;'||ln_;
+    END IF;
+text_ := text_ ||
+'  END;
+
+  PROCEDURE Clear_Rec ( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      rec_ := NULL;
+  END;
+
+  PROCEDURE Clear_With_Default( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      Clear_Rec( rec_ );
+      Add_Default( rec_ );
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   CHECK_RECORD  -----------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Check_Not_Null( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).nullable = 'N' AND col_info_(i_).column_name != 'ROWVERSION' THEN
+text_ := text_ || REPLACE(
+'
+      IF rec_.%COLUMN% IS NULL THEN
+          Error_Api.Column_Is_Null( ''%PACKAGE%_API'', ''%COLUMN%'' );
+      END IF;
+'
+, '%COLUMN%', col_info_(i_).column_name);
+        END IF;
+    END LOOP;
+text_ := text_ ||
+'
+  END;
+
+  PROCEDURE Check_Reference( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+';
+    found_ := FALSE;
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).attr.exists('REF') THEN
+            param_ := col_info_(i_).attr('REF_PARAM');
+            param_ := translate( param_, '1() ', '1' );
+            param_ := ',' || param_;
+            param_ := REPLACE( param_, ',', ', rec_.');
+            param_ := '(' || substr(param_,2) || ' )';
+            IF col_info_(i_).nullable = 'Y' THEN
+                text_ := text_ || '      IF rec_.'||col_info_(i_).column_name||' IS NOT NULL THEN ' ||col_info_(i_).attr('REF')||'.Check_Exist'||param_||'; END IF;'||ln_;
+            ELSE
+                text_ := text_ || '      ' ||col_info_(i_).attr('REF')||'.Check_Exist'||param_||';'||ln_;
+            END IF;
+            found_ := TRUE;
+        END IF;
+        IF col_info_(i_).attr.exists('ENUM') THEN
+            IF col_info_(i_).nullable = 'Y' THEN
+                text_ := text_ || '      IF rec_.'||col_info_(i_).column_name||' IS NOT NULL THEN'||ln_;
+            END IF;
+                text_ := text_ || '      IF rec_.'||col_info_(i_).column_name||' NOT IN ('''|| replace(col_info_(i_).attr('ENUM'), ',', ''',''') ||''') THEN'||ln_
+                               || '          Error_Api.Error( '''||package_||'.VALUE_ENUM'', ''Kolumna :P1 ma niepoprawnÄ… wartoĹ›Ä‡ :P2.'', '''||col_info_(i_).column_name||''', rec_.'||col_info_(i_).column_name||' );'||ln_
+                               || '      END IF;'||ln_;
+            IF col_info_(i_).nullable = 'Y' THEN
+                text_ := text_ || '      END IF;'||ln_;
+            END IF;
+            found_ := TRUE;
+        END IF;
+    END LOOP;
+    IF NOT found_ THEN
+        text_ := text_ ||'     NULL;'||ln_;
+    END IF;
+text_ := text_ ||
+'  END;
+
+
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   NEW/MODIFY/REMOVE  ------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Get_New_Id( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+';
+    IF FND_Api.Exist_Sequence( package_||'_SEQ' ) THEN
+        text_ := text_ ||
+'     SELECT %PACKAGE%_SEQ.nextval INTO rec_.id FROM DUAL;';
+    ELSE
+        text_ := text_ || '      NULL;';
+    END IF;
+
+text_ := text_ ||
+'
+  END;
+
+  PROCEDURE Fix_Columns_Format( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+';
+    found_ := FALSE;
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        prec_prefix_  := '';
+        prec_suffix_  := '';
+        IF col_info_(i_).attr.exists('UPPER') AND col_info_(i_).attr.exists('TRIM') THEN
+            prec_prefix_  := 'Upper( Trim( ';
+            prec_suffix_  := ' ))';
+        ELSIF col_info_(i_).attr.exists('LOWER') AND col_info_(i_).attr.exists('TRIM') THEN
+            prec_prefix_  := 'Lower( Trim( ';
+            prec_suffix_  := ' ))';
+        ELSIF col_info_(i_).attr.exists('UPPER')THEN
+            prec_prefix_  := 'Upper( ';
+            prec_suffix_  := ' )';
+        ELSIF col_info_(i_).attr.exists('LOWER')THEN
+            prec_prefix_  := 'Lower( ';
+            prec_suffix_  := ' )';
+        ELSIF col_info_(i_).attr.exists('TRIM')THEN
+            prec_prefix_  := 'Trim( ';
+            prec_suffix_  := ' )';
+        END IF;
+
+        IF prec_prefix_ IS NOT NULL THEN
+            text_ := text_ || '     rec_.'||col_info_(i_).column_name||' := '||prec_prefix_||' rec_.'|| col_info_(i_).column_name ||' '||prec_suffix_||';'||ln_;
+            found_ := TRUE;
+        END IF;
+    END LOOP;
+    IF NOT found_ THEN
+        text_ := text_ ||'     NULL;'||ln_;
+    END IF;
+text_ := text_ ||
+'  END;
+
+  PROCEDURE NEW   ( ';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).column_name != 'ROWVERSION' THEN
+                IF i_ != col_info_.first THEN
+                    text_ := text_ || ', '||ln_||'                    ';
+                END IF;
+                text_ := text_ || REPLACE(REPLACE(
+                                  '%COLUMN_% IN %PACKAGE%.%COLUMN%%TYPE DEFAULT NULL', 
+                                  '%COLUMN_%',  rpad(col_info_(i_).column_name||'_', 32)),
+                                  '%COLUMN%',  col_info_(i_).column_name);
+            END IF;
+        END LOOP;
+text_ := text_ ||'  ) IS
+      rec_ REC;
+  BEGIN
+';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).column_name != 'ROWVERSION' THEN
+                text_ := text_ || REPLACE('      rec_.%COLUMN% := %COLUMN%_;'||ln_, '%COLUMN%', col_info_(i_).column_name);
+            END IF;
+        END LOOP;
+text_ := text_ ||
+'      NEW( rec_ );
+  END;
+
+
+  PROCEDURE NEW   ( new_rec_ IN OUT NOCOPY REC ) IS
+      rowid_    rowid;
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( ''%PACKAGE%_APT'', ''New'' );
+          Log( new_rec_, ''New'' );
+      END IF;
+      Add_Default( new_rec_ );
+      Get_New_Id( new_rec_ );
+      Fix_Columns_Format( new_rec_ );
+      IF %PACKAGE%_API.New_Pre( new_rec_ ) THEN
+
+          Check_Not_Null( new_rec_ );
+          Check_Reference( new_rec_ );
+
+          new_rec_.rowversion := SYSDATE;
+
+          BEGIN
+             INSERT INTO %PACKAGE%_TAB
+             VALUES new_rec_
+             RETURNING ROWID into rowid_;
+
+             SELECT *
+               INTO new_rec_
+               FROM %PACKAGE%_TAB
+              WHERE ROWID = rowid_;
+          EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
+             Error_Api.Record_Exist( ''%PACKAGE%_TAB'', new_rec_.%IND_FIRST% );
+          END;
+
+          %PACKAGE%_API.New_Post( new_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE Modify( new_rec_ IN OUT NOCOPY REC ) IS
+      old_rec_ REC;
+      rowid_   ROWID;
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( ''%PACKAGE%_APT'', ''Modify'' );
+      END IF;
+      rowid_ := Get_Rowid_And_Lock( new_rec_ );
+      Fix_Columns_Format( new_rec_ );
+      old_rec_ := Get( ';
+        FOR i_ IN nvl(ind_info_.first,1)..nvl(ind_info_.last,-1) LOOP
+            IF i_ != ind_info_.first THEN
+               text_ := text_ || ', ';
+            END IF;
+            text_ := text_ || 'new_rec_.'|| ind_info_(i_).column_name;
+        END LOOP;
+        IF ind_info_.first IS NULL THEN
+            text_ := text_ || 'new_rec_.id';
+        END IF;
+text_ := text_ || ' );
+      IF FND_Api.Log_Is_On THEN
+          Log_Diff( old_rec_, new_rec_, ''Modify'' );
+      END IF;
+      IF %PACKAGE%_API.Modify_Pre( old_rec_, new_rec_ ) THEN
+          Check_Not_Null( new_rec_ );
+          Check_Reference( new_rec_ );
+          IF new_rec_.rowversion != old_rec_.rowversion THEN
+             Error_Api.Record_Modified( ''%PACKAGE%_API'', new_rec_.%IND_FIRST% );
+          END IF;
+
+          new_rec_.rowversion := SYSDATE;
+
+          UPDATE %PACKAGE%_TAB
+             SET ROW = new_rec_
+          WHERE ROWID = rowid_;
+
+          %PACKAGE%_API.Modify_Post( old_rec_, new_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE New_Or_Modify( new_rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      IF new_rec_.id IS NULL THEN
+          New( new_rec_ );
+      ELSE
+          Modify( new_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE Remove( rem_rec_ IN OUT NOCOPY REC ) IS
+      rowid_   ROWID;
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( ''%PACKAGE%_APT'', ''Remove'' );
+          Log( rem_rec_, ''Remove'' );
+      END IF;
+      IF %PACKAGE%_API.Remove_Pre( rem_rec_ ) THEN
+          rowid_ := Get_Rowid_And_Lock( rem_rec_ );
+
+          DELETE FROM %PACKAGE%_TAB
+           WHERE ROWID = rowid_;
+
+          %PACKAGE%_API.Remove_Post( rem_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE Remove( %IND_PARAM% ) IS
+      rem_rec_ REC;
+  BEGIN
+      rem_rec_ := Get( %IND_ARG% );
+      Remove( rem_rec_ );
+  END;
+
+  PROCEDURE CRUD( type_ IN VARCHAR2, rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( ''%PACKAGE%_APT'', ''CRUD'' );
+      END IF;
+      IF type_ in (''Create'',''Add'') THEN
+          New( rec_ );
+      ELSIF type_ = ''Update'' THEN
+          Modify( rec_ );
+      ELSIF type_ = ''Delete'' THEN
+          Remove( rec_ );
+      END IF;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   LOG  --------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Log( rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL ) IS
+  BEGIN
+      IF NOT FND_Api.Log_Is_On THEN
+          RETURN;
+      END IF;
+      FND_Api.Log( ''    --- %PACKAGE% ''||call_method_||'' ----'' );
+';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).data_type NOT LIKE '%LOB' THEN
+                text_ := text_ || '      FND_Api.Log( ''    ' || col_info_(i_).column_name || ''',  rec_.'|| col_info_(i_).column_name || ' ); '||ln_;
+            END IF;
+        END LOOP;
+text_ := text_ ||
+'  END;
+
+  PROCEDURE Log_Diff( old_rec_ IN OUT NOCOPY REC, new_rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL) IS
+  BEGIN
+      IF NOT FND_Api.Log_Is_On THEN
+          RETURN;
+      END IF;
+      FND_Api.Log( ''    --- DIFF: %PACKAGE% ''||call_method_||'' ---'' );
+';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).data_type NOT LIKE '%LOB' THEN
+                text_ := text_ || '      IF nvl(old_rec_.'|| col_info_(i_).column_name || ',''_'') != nvl(new_rec_.'|| col_info_(i_).column_name || ',''_'') THEN'||ln_;
+                text_ := text_ || '          FND_Api.Log( ''    OLD: ' || col_info_(i_).column_name || ''',  old_rec_.'|| col_info_(i_).column_name || ' ); '||ln_;
+                text_ := text_ || '          FND_Api.Log( ''    NEW: ' || col_info_(i_).column_name || ''',  new_rec_.'|| col_info_(i_).column_name || ' ); '||ln_;
+                text_ := text_ || '      END IF;'||ln_;
+            END IF;
+
+        END LOOP;
+text_ := text_ ||
+'  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   GET RECORD  -------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION Get ( %IND_PARAM% ) RETURN REC IS
+     rec_ REC;
+
+     CURSOR get_ IS
+     SELECT *
+       FROM %PACKAGE%_TAB
+      WHERE %IND_WHERE%;
+  BEGIN
+     OPEN get_;
+     FETCH get_ INTO rec_;
+     CLOSE get_;
+     RETURN rec_;
+  END;
+
+  FUNCTION Get_View( %IND_PARAM% ) RETURN %PACKAGE%%ROWTYPE IS
+     rec_ %PACKAGE%%ROWTYPE;
+
+     CURSOR get_ IS
+     SELECT *
+       FROM %PACKAGE%
+      WHERE %IND_WHERE%;
+  BEGIN
+     OPEN get_;
+     FETCH get_ INTO rec_;
+     CLOSE get_;
+     RETURN rec_;
+  END;
+
+  FUNCTION Get_Rec( '||ln_||all_coll_param_|| ' ) RETURN REC IS
+    sql_     VARCHAR2(32000);
+    cursor_  INTEGER;
+    result_  INTEGER;
+    rec_     REC;
+  BEGIN
+     cursor_ := DBMS_sql.open_cursor;
+     sql_ := ''SELECT * FROM %PACKAGE%_TAB WHERE rownum = 1 '';
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).column_name != 'ROWVERSION' AND col_info_(i_).data_type != 'BLOB' THEN
+            text_ := text_ || REPLACE(
+'
+     IF %COLUMN%_ IS NOT NULL THEN
+         IF instr(%COLUMN%_,''%'') > 0 OR instr(%COLUMN%_,''_'') > 0 THEN
+             sql_ := sql_ || '' AND %COLUMN% LIKE :%COLUMN%_ '';
+         ELSE
+             sql_ := sql_ || '' AND %COLUMN% = :%COLUMN%_ '';
+         END IF;
+     END IF;', '%COLUMN%', col_info_(i_).column_name );
+        END IF;
+    END LOOP;
+
+    text_ := text_ || '
+
+     DBMS_sql.parse( cursor_, sql_, DBMS_sql.native );
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).column_name != 'ROWVERSION' THEN
+            text_ := text_ || REPLACE(
+'
+     IF %COLUMN%_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, '':%COLUMN%_'', %COLUMN%_ );
+     END IF;', '%COLUMN%', col_info_(i_).column_name );
+        END IF;
+    END LOOP;
+
+    text_ := text_ || ln_;
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).data_type = 'VARCHAR2' THEN
+           text_ := text_ ||REPLACE( '     DBMS_SQL.DEFINE_COLUMN(cursor_, '||i_||', rec_.%COLUMN%, '|| col_info_(i_).length ||');'||ln_, '%COLUMN%', col_info_(i_).column_name );
+        ELSE
+           text_ := text_ ||REPLACE( '     DBMS_SQL.DEFINE_COLUMN(cursor_, '||i_||', rec_.%COLUMN%);'||ln_, '%COLUMN%', col_info_(i_).column_name );
+        END IF;
+    END LOOP;
+
+    text_ := text_ || '
+     result_ := DBMS_sql.execute( cursor_ );
+     IF DBMS_SQL.FETCH_ROWS(cursor_) > 0 THEN
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        text_ := text_ ||REPLACE( '         DBMS_SQL.COLUMN_VALUE(cursor_, '||i_||', rec_.%COLUMN%);'||ln_, '%COLUMN%', col_info_(i_).column_name );
+    END LOOP;
+
+text_ := text_ || '
+     END IF;
+     DBMS_sql.close_cursor( cursor_ );
+     RETURN rec_;
+  END;
+
+
+  FUNCTION Get_Recs( '||ln_||all_coll_param_||' ) RETURN REC_TABLE IS
+    sql_     VARCHAR2(32000);
+    cursor_  INTEGER;
+    result_  INTEGER;
+    rec_     REC;
+    recs_    REC_TABLE;
+  BEGIN
+     cursor_ := DBMS_sql.open_cursor;
+     sql_ := ''SELECT * FROM %PACKAGE%_TAB WHERE 1 = 1 '';
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).column_name != 'ROWVERSION' AND col_info_(i_).data_type != 'BLOB' THEN
+            text_ := text_ || REPLACE(
+'
+     IF %COLUMN%_ IS NOT NULL THEN
+         IF instr(%COLUMN%_,''%'') > 0 OR instr(%COLUMN%_,''_'') > 0 THEN
+             sql_ := sql_ || '' AND %COLUMN% LIKE :%COLUMN%_ '';
+         ELSE
+             sql_ := sql_ || '' AND %COLUMN% = :%COLUMN%_ '';
+         END IF;
+     END IF;', '%COLUMN%', col_info_(i_).column_name );
+        END IF;
+    END LOOP;
+
+    text_ := text_ || '
+
+     DBMS_sql.parse( cursor_, sql_, DBMS_sql.native );
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).column_name != 'ROWVERSION' THEN
+            text_ := text_ || REPLACE(
+'
+     IF %COLUMN%_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, '':%COLUMN%_'', %COLUMN%_ );
+     END IF;', '%COLUMN%', col_info_(i_).column_name );
+        END IF;
+    END LOOP;
+
+    text_ := text_ || ln_;
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        IF col_info_(i_).data_type = 'VARCHAR2' THEN
+           text_ := text_ ||REPLACE( '     DBMS_SQL.DEFINE_COLUMN(cursor_, '||i_||', rec_.%COLUMN%, '|| col_info_(i_).length ||');'||ln_, '%COLUMN%', col_info_(i_).column_name );
+        ELSE
+           text_ := text_ ||REPLACE( '     DBMS_SQL.DEFINE_COLUMN(cursor_, '||i_||', rec_.%COLUMN%);'||ln_, '%COLUMN%', col_info_(i_).column_name );
+        END IF;
+    END LOOP;
+
+    text_ := text_ || '
+     result_ := DBMS_sql.execute( cursor_ );
+     WHILE DBMS_SQL.FETCH_ROWS(cursor_) > 0 LOOP
+         rec_ := NULL;
+';
+    FOR i_ IN col_info_.first..col_info_.last LOOP
+        text_ := text_ ||REPLACE( '         DBMS_SQL.COLUMN_VALUE(cursor_, '||i_||', rec_.%COLUMN%);'||ln_, '%COLUMN%', col_info_(i_).column_name );
+    END LOOP;
+
+text_ := text_ || '
+         recs_( recs_.count+1 ) := rec_;
+     END LOOP;
+     DBMS_sql.close_cursor( cursor_ );
+     RETURN recs_;
+  END;
+';
+
+/*
+text_ := text_ || '
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   GET/SET COLUMN  ---------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION Get_Value ( column_name_ IN VARCHAR2,'||ln_||all_coll_param_||' ) RETURN VARCHAR2 IS
+     rec_ REC;
+  BEGIN
+     rec_ := Get_Rec( '||ln_||all_coll_value_||' );
+     CASE upper(column_name_)  ';
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            text_ := text_ ||'
+         WHEN '''||col_info_(i_).column_name||''' THEN
+            RETURN rec_.'||col_info_(i_).column_name||';';
+        END LOOP;
+text_ := text_ ||'
+         ELSE
+            Error_Api.Error( ''COLUMN_NOT_EXIST'', ''Column :P1 not exists in :P2.'', column_name_, ''%PACKAGE%'' );
+     END CASE;
+  END;
+
+  FUNCTION Get_Value_Date ( column_name_ IN VARCHAR2,'||ln_||all_coll_param_||' ) RETURN DATE IS
+     rec_ REC;
+  BEGIN
+     rec_ := Get_Rec( '||ln_||all_coll_value_||' );
+     CASE upper(column_name_)  ';
+        found_ := FALSE;
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).data_type = 'DATE' THEN
+            text_ := text_ ||'
+         WHEN '''||col_info_(i_).column_name||''' THEN
+            RETURN rec_.'||col_info_(i_).column_name||';';
+            found_ := TRUE;
+            END IF;
+        END LOOP;
+        IF NOT found_ THEN
+            text_ := text_ ||'
+         WHEN ''_'' THEN
+            NULL;';
+        END IF;
+text_ := text_ ||'
+         ELSE
+            Error_Api.Error( ''COLUMN_DATE_NOT_EXIST'', ''Column :P1 type DATE not exists in :P2.'', column_name_, ''%PACKAGE%'' );
+     END CASE;
+  END;
+
+  FUNCTION Get_Value_Number ( column_name_ IN VARCHAR2,'||ln_||all_coll_param_||' ) RETURN NUMBER IS
+     rec_ REC;
+  BEGIN
+     rec_ := Get_Rec( '||ln_||all_coll_value_||' );
+     CASE upper(column_name_)  ';
+        found_ := FALSE;
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).data_type = 'NUMBER' THEN
+            text_ := text_ ||'
+         WHEN '''||col_info_(i_).column_name||''' THEN
+            RETURN rec_.'||col_info_(i_).column_name||';';
+            found_ := TRUE;
+            END IF;
+        END LOOP;
+        IF NOT found_ THEN
+            text_ := text_ ||'
+         WHEN ''_'' THEN
+            NULL;';
+        END IF;
+text_ := text_ ||'
+         ELSE
+            Error_Api.Error( ''COLUMN_NUMBER_NOT_EXIST'', ''Column :P1 type NUMBER not exists in :P2.'', column_name_, ''%PACKAGE%'' );
+     END CASE;
+  END;
+
+  PROCEDURE Set_Value ( column_name_ IN VARCHAR2, set_value_ IN VARCHAR2,'||ln_||all_coll_param_||' ) IS
+     recs_ REC_TABLE;
+  BEGIN
+     recs_ := Get_Rec_Table( '||ln_||all_coll_value_||' );
+     FOR i_ IN 1..recs_.count LOOP
+         CASE upper(column_name_)  ';
+            FOR i_ IN col_info_.first..col_info_.last LOOP
+                text_ := text_ ||'
+             WHEN '''||col_info_(i_).column_name||''' THEN
+                recs_(i_).'||col_info_(i_).column_name||' := set_value_;';
+            END LOOP;
+text_ := text_ ||'
+             ELSE
+                Error_Api.Error( ''COLUMN_NOT_EXIST'', ''Column :P1 not exists in :P2.'', column_name_, ''%PACKAGE%'' );
+         END CASE;
+         Modify( recs_(i_) );
+     END LOOP;
+  END;
+
+  PROCEDURE Set_Value ( column_name_ IN VARCHAR2, set_value_ IN NUMBER,'||ln_||all_coll_param_||' ) IS
+     recs_ REC_TABLE;
+  BEGIN
+     recs_ := Get_Rec_Table( '||ln_||all_coll_value_||' );
+     FOR i_ IN 1..recs_.count LOOP
+         CASE upper(column_name_)  ';
+            found_ := FALSE;
+            FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).data_type IN ('NUMBER','VARCHAR2') THEN
+                text_ := text_ ||'
+             WHEN '''||col_info_(i_).column_name||''' THEN
+                recs_(i_).'||col_info_(i_).column_name||' := set_value_;';
+            found_ := TRUE;
+            END IF;
+            END LOOP;
+            IF NOT found_ THEN
+                text_ := text_ ||'
+             WHEN ''_'' THEN
+                NULL;';
+            END IF;
+text_ := text_ ||'
+             ELSE
+                Error_Api.Error( ''COLUMN_NUMBER_NOT_EXIST'', ''Column :P1 type NUMBER not exists in :P2.'', column_name_, ''%PACKAGE%'' );
+         END CASE;
+         Modify( recs_(i_) );
+     END LOOP;
+  END;
+
+  PROCEDURE Set_Value ( column_name_ IN VARCHAR2, set_value_ IN DATE,'||ln_||all_coll_param_||' ) IS
+     recs_ REC_TABLE;
+  BEGIN
+     recs_ := Get_Rec_Table( '||ln_||all_coll_value_||' );
+     FOR i_ IN 1..recs_.count LOOP
+         CASE upper(column_name_)  ';
+            found_ := FALSE;
+            FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).data_type = 'DATE' THEN
+                text_ := text_ ||'
+             WHEN '''||col_info_(i_).column_name||''' THEN
+                recs_(i_).'||col_info_(i_).column_name||' := set_value_;';
+            found_ := TRUE;
+            END IF;
+            END LOOP;
+            IF NOT found_ THEN
+                text_ := text_ ||'
+             WHEN ''_'' THEN
+                NULL;';
+            END IF;
+text_ := text_ ||'
+             ELSE
+                Error_Api.Error( ''COLUMN_DATE_NOT_EXIST'', ''Column :P1 type DATE not exists in :P2.'', column_name_, ''%PACKAGE%'' );
+         END CASE;
+         Modify( recs_(i_) );
+     END LOOP;
+  END;
+
+';
+*/
+/*
+  PROCEDURE Set_Value ( set_value_ IN %PACKAGE%.%COLUMN%%TYPE, '||ln_||all_coll_param_||' ) IS
+     recs_ REC_TABLE;
+  BEGIN
+     recs_ := Get_Rec_Table( '||ln_||all_coll_value_||' );
+     FOR i_ IN 1..recs_.count LOOP
+         recs_(i_).%COLUMN% := set_value_;
+         Modify( recs_(i_) );
+     END LOOP;
+  END;
+
+        FOR i_ IN col_info_.first..col_info_.last LOOP
+            IF col_info_(i_).index_pri = 'N' AND col_info_(i_).column_name != 'ROWVERSION' THEN
+            text_ := text_ || REPLACE(
+'
+  --- %COLUMN% ---
+
+  FUNCTION Get_%COLUMN% ( '||ln_||all_coll_param_||' ) RETURN %PACKAGE%.%COLUMN%%TYPE IS
+  BEGIN
+     RETURN Get_Rec( '||ln_||all_coll_value_||' ).%COLUMN%;
+  END;
+
+  PROCEDURE Set_%COLUMN% ( set_value_ IN %PACKAGE%.%COLUMN%%TYPE, '||ln_||all_coll_param_||' ) IS
+     recs_ REC_TABLE;
+  BEGIN
+     recs_ := Get_Rec_Table( '||ln_||all_coll_value_||' );
+     FOR i_ IN 1..recs_.count LOOP
+         recs_(i_).%COLUMN% := set_value_;
+         Modify( recs_(i_) );
+     END LOOP;
+  END;
+
+', '%COLUMN%', col_info_(i_).column_name);
+            END IF;
+        END LOOP;
+*/
+text_ := text_ ||
+'
+
+
+end %PACKAGE%_APT;
+';
+      text_ := REPLACE(REPLACE(REPLACE(REPLACE(REPLACE( text_, '%PACKAGE%', package_), '%IND_PARAM%', ind_param_str_ ),
+                   '%IND_WHERE%', ind_where_str_ ), '%IND_ARG%', ind_argument_str_ ), '%IND_FIRST%', CASE WHEN ind_info_.first IS NULL THEN 'ID' ELSE ind_info_(1).column_name END );
+      RETURN text_;
+  END;
+
+  FUNCTION Text_API( table_name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+      text_   VARCHAR2(32600);
+      package_  VARCHAR2(50);
+  BEGIN
+      package_ := upper(table_name_);
+      package_ := substr(package_, 1, length(package_)-4 );
+      text_ :=
+'
+create or replace package '|| package_user_id_ ||'%PACKAGE%_API is
+
+  FUNCTION  New_Pre ( rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) RETURN BOOLEAN;
+  PROCEDURE New_Post( rec_ IN OUT NOCOPY %PACKAGE%_APT.REC );
+
+  FUNCTION  Modify_Pre ( old_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC, new_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) RETURN BOOLEAN;
+  PROCEDURE Modify_Post( old_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC, new_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC );
+
+  FUNCTION  Remove_Pre ( rem_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) RETURN BOOLEAN;
+  PROCEDURE Remove_Post( rem_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC );
+
+  --------------------------------------------------------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+end %PACKAGE%_API;
+';
+      text_ := REPLACE( text_, '%PACKAGE%', package_);
+      RETURN text_;
+  END;
+
+  FUNCTION Text_API_Body( table_name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+      text_     VARCHAR2(32600);
+      package_  VARCHAR2(50);
+  BEGIN
+      package_ := upper(table_name_);
+      package_ := substr(package_, 1, length(package_)-4 );
+      text_ :=
+'
+create or replace package body '|| package_user_id_ ||'%PACKAGE%_API is
+
+  FUNCTION  New_Pre ( rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) RETURN BOOLEAN IS
+  BEGIN
+      RETURN TRUE;
+  END;
+
+  PROCEDURE New_Post( rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) IS
+  BEGIN
+      NULL;
+  END;
+
+  FUNCTION  Modify_Pre ( old_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC, new_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) RETURN BOOLEAN IS
+  BEGIN
+      RETURN TRUE;
+  END;
+
+  PROCEDURE Modify_Post( old_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC, new_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) IS
+  BEGIN
+      NULL;
+  END;
+
+  FUNCTION  Remove_Pre ( rem_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) RETURN BOOLEAN IS
+  BEGIN
+      RETURN TRUE;
+  END;
+
+  PROCEDURE Remove_Post( rem_rec_ IN OUT NOCOPY %PACKAGE%_APT.REC ) IS
+  BEGIN
+      NULL;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+end %PACKAGE%_API;
+';
+      text_ := REPLACE( text_, '%PACKAGE%', package_);
+      RETURN text_;
+  END;
+
+  FUNCTION Text_Sequence( table_name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+      text_     VARCHAR2(2000);
+      sequence_ VARCHAR2(50);
+      --ind_info_ table_ind_info_type;
+      col_info_ table_col_info_type;
+  BEGIN      
+      --ind_info_ := Get_Table_Ind_Info( table_name_ );
+      --IF ind_info_.count = 1 AND ind_info_(1).data_type = 'NUMBER' THEN
+      --    sequence_ := substr( table_name_, 1, length(table_name_)-4) || '_SEQ';
+      --    text_ := 'create sequence ' || package_user_id_ ||sequence_||' start with 1 increment by 1 cache 20 ';
+      --END IF;
+      col_info_ := Get_Table_Col_Info( table_name_ );
+      IF col_info_(1).column_name = 'ID' THEN
+          sequence_ := substr( table_name_, 1, length(table_name_)-4) || '_SEQ';
+          text_ := 'create sequence ' || package_user_id_ ||sequence_||' start with 1 increment by 1 cache 20 ';
+      END IF;
+      RETURN text_;
+  END;
+
+
+  PROCEDURE Create_View( table_name_ IN VARCHAR2 ) IS
+  BEGIN
+      BEGIN
+          EXECUTE IMMEDIATE Text_View( table_name_ );
+      EXCEPTION WHEN OTHERS THEN
+          IF FND_Api.Log_Is_On() THEN
+             FND_Api.Log( 'Error create view '||table_name_||'.');
+             FND_Api.Log( SQLERRM );
+             FND_Api.Log( Text_View( table_name_ ) );
+           ELSE
+              DBMS_output.put_line( 'Error create view '||table_name_||'.');
+           END IF;
+      END;
+  END;
+
+  PROCEDURE Create_Sequence( table_name_ IN VARCHAR2 ) IS
+      sequence_     VARCHAR2(50);
+      sequence_str_ VARCHAR2(2000);
+  BEGIN
+      sequence_ := substr( table_name_, 1, length(table_name_)-4) || '_SEQ';
+      IF NOT FND_Api.Exist_Sequence( sequence_ ) THEN
+          sequence_str_ := Text_Sequence( table_name_ );
+          IF sequence_str_ IS NOT NULL THEN
+              BEGIN
+                  EXECUTE IMMEDIATE sequence_str_;
+              EXCEPTION WHEN OTHERS THEN
+                 IF FND_Api.Log_Is_On() THEN
+                     FND_Api.Log('Error create '||sequence_||'.');
+                     FND_Api.Log( SQLERRM );
+                     FND_Api.Log(sequence_str_);
+                 ELSE
+                     DBMS_output.put_line( 'Error create '||sequence_||'.');
+                 END IF;
+              END;
+          END IF;
+      END IF;
+  END;
+
+  PROCEDURE Create_APT( table_name_ IN VARCHAR2 ) IS
+      package_    VARCHAR2(50);
+  BEGIN
+      package_ := substr( table_name_, 1, length(table_name_)-4) || '_APT';
+      BEGIN
+          EXECUTE IMMEDIATE Text_APT( table_name_ );
+      EXCEPTION WHEN OTHERS THEN
+         IF FND_Api.Log_Is_On() THEN
+             FND_Api.Log('Error create '||package_||'.');
+             FND_Api.Log( SQLERRM );
+             FND_Api.Log(Text_APT( table_name_ ));
+         ELSE
+             DBMS_output.put_line( 'Error create '||package_||'.');
+         END IF;
+      END;
+      BEGIN
+         EXECUTE IMMEDIATE Text_APT_Body( table_name_ );
+      EXCEPTION WHEN OTHERS THEN
+         IF FND_Api.Log_Is_On() THEN
+             FND_Api.Log('Error create '||package_||' body.');
+             FND_Api.Log( SQLERRM );
+             FND_Api.Log(Text_APT_Body( table_name_ ));
+         ELSE
+             DBMS_output.put_line( 'Error create '||package_||' body.');
+         END IF;
+      END;
+  END;
+
+  PROCEDURE Create_API( table_name_ IN VARCHAR2 ) IS
+      package_    VARCHAR2(50);
+  BEGIN
+      package_ := substr( table_name_, 1, length(table_name_)-4) || '_API';
+      IF NOT FND_Api.Exist_Package( package_ ) THEN
+          BEGIN
+              EXECUTE IMMEDIATE Text_API( table_name_ );
+          EXCEPTION WHEN OTHERS THEN
+             IF FND_Api.Log_Is_On() THEN
+                 FND_Api.Log('Error create '||package_||'.');
+                 FND_Api.Log( SQLERRM );
+                 FND_Api.Log( Text_API( table_name_ ));
+             ELSE
+                 DBMS_output.put_line( 'Error create '||package_||'.');
+             END IF;
+          END;
+          BEGIN
+             EXECUTE IMMEDIATE Text_API_Body( table_name_ );
+          EXCEPTION WHEN OTHERS THEN
+             IF FND_Api.Log_Is_On() THEN
+                 FND_Api.Log('Error create '||package_||' body.');
+                 FND_Api.Log( SQLERRM );
+                 FND_Api.Log( Text_API_Body( table_name_ ));
+             ELSE
+                 DBMS_output.put_line( 'Error create '||package_||' body.');
+             END IF;
+          END;
+      END IF;
+  END;
+
+  PROCEDURE Create_Trigger( table_name_ IN VARCHAR2 ) IS
+  BEGIN
+      IF FND_Api.Exist_Sequence( substr(table_name_, 1, length(table_name_)-4)||'_SEQ' ) THEN
+          BEGIN
+              EXECUTE IMMEDIATE Text_Trigger( table_name_ );
+          EXCEPTION WHEN OTHERS THEN
+             IF FND_Api.Log_Is_On() THEN
+                 FND_Api.Log('Error create trigger for '||table_name_||'.');
+                 FND_Api.Log( SQLERRM );
+                 FND_Api.Log( Text_Trigger( table_name_ ) );
+             ELSE
+                 DBMS_output.put_line( 'Error create trigger for '||table_name_||'.');
+             END IF;
+          END;
+      END IF;
+  END;
+
+  PROCEDURE Create_All( table_name_ IN VARCHAR2 )  IS
+  BEGIN
+      IF table_name_ NOT LIKE '%TAB' THEN
+         Create_All( upper(substr(table_name_, 1, LENGTH(table_name_)-4)||'_TAB') );
+         RETURN;
+      END IF;
+      DBMS_output.put_line( 'Create packages for '||table_name_);
+      Create_View( table_name_ );
+      Create_Sequence( table_name_ );
+      Create_APT( table_name_ );
+      Create_API( table_name_ );
+      Create_Trigger( table_name_ );
+      FND_Api.Compile();
+  END;
+
+  PROCEDURE ReCreateNew IS
+  BEGIN
+      FOR o_ IN (  SELECT object_name
+                     FROM user_objects t
+                    WHERE object_name LIKE '%_TAB'
+                      AND EXISTS (SELECT 1
+                                    FROM user_objects i
+                                   WHERE i.object_name = substr(t.object_name, 1, LENGTH(t.object_name)-4)||'_APT' )
+                    UNION
+                   SELECT object_name
+                     FROM user_objects t
+                    WHERE object_name LIKE '%_TAB'
+                      AND EXISTS (SELECT *
+                                    FROM user_tab_comments i
+                                   WHERE i.table_name = t.object_name
+                                     AND '^'||comments||'^' LIKE '%^AUTO^%' )
+                    MINUS
+                    SELECT object_name
+                    FROM user_objects t
+                    WHERE object_name LIKE '%_TAB'
+                      AND TIMESTAMP < (SELECT max(i.TIMESTAMP)
+                                    FROM user_objects i
+                                   WHERE i.object_name = substr(t.object_name, 1, LENGTH(t.object_name)-4)||'_APT' )
+                  ) LOOP
+          Create_All( o_.object_name );
+      END LOOP;
+  END;
+
+  PROCEDURE ReCreateAll IS
+  BEGIN
+      FOR o_ IN (  SELECT object_name
+                     FROM user_objects t
+                    WHERE object_name LIKE '%_TAB'
+                      AND EXISTS (SELECT 1
+                                    FROM user_objects i
+                                   WHERE i.object_name = substr(t.object_name, 1, LENGTH(t.object_name)-4)||'_APT' )
+                    UNION
+                   SELECT object_name
+                     FROM user_objects t
+                    WHERE object_name LIKE '%_TAB'
+                      AND EXISTS (SELECT *
+                                    FROM user_tab_comments i
+                                   WHERE i.table_name = t.object_name
+                                     AND '^'||comments||'^' LIKE '%^AUTO^%' )
+                  ) LOOP
+          Create_All( o_.object_name );
+      END LOOP;
+  END;
+
+  PROCEDURE SetUser( user_id_ IN VARCHAR2 ) IS
+  BEGIN
+      package_user_id_ := nvl( user_id_, USER )||'.';
+  END;
+
+end FND_CREATE_PACKAGE_API;
+/

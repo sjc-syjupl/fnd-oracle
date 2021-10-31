@@ -1,0 +1,25 @@
+create or replace type XML_OBJ as object
+(
+
+   xml_            XMLType,
+   xml_path_       VARCHAR2(2000),
+   xml_namespace_  VARCHAR2(2000),
+   xml_item_str_   VARCHAR2(50),
+
+  MEMBER  FUNCTION This      RETURN XML_Obj,
+  MEMBER  FUNCTION Full_Path( path_ IN VARCHAR2 ) RETURN VARCHAR2,
+
+  MEMBER  FUNCTION Exist( path_ IN VARCHAR2 ) RETURN BOOLEAN,
+
+  MEMBER  FUNCTION  To_Clob RETURN CLOB,
+  MEMBER  PROCEDURE From_Clob( clob_ IN CLOB ),
+
+  MEMBER  FUNCTION Attr_Record( path_ IN VARCHAR2 ) RETURN Attr_Obj,
+  MEMBER  FUNCTION Attr_Table ( path_ IN VARCHAR2 ) RETURN Attr_Tab PIPELINED,
+  MEMBER  FUNCTION AttrS_Table( path_ IN VARCHAR2 ) RETURN AttrS_Tab PIPELINED,
+
+  MEMBER  FUNCTION Get_Struct RETURN string_tab PIPELINED,
+  MEMBER  FUNCTION Get_Values RETURN two_string_tab PIPELINED
+
+)
+/

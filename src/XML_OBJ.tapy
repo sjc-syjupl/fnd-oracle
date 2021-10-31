@@ -1,0 +1,235 @@
+create or replace type body XML_OBJ is
+
+  MEMBER  FUNCTION This      RETURN XML_Obj IS
+  BEGIN
+      RETURN SELF;
+  END;
+
+
+  MEMBER  FUNCTION Full_Path( path_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+  BEGIN
+      IF path_ IS NULL THEN
+          RETURN xml_path_;
+      ELSIF xml_path_ IS NULL THEN
+          RETURN path_;
+      END IF;
+      RETURN replace(xml_path_||'/'||path_, '//', '/' );
+  END;
+
+  MEMBER  FUNCTION Exist( path_ IN VARCHAR2 ) RETURN BOOLEAN IS
+      full_path_     VARCHAR2(2000);
+      --tmp_xml_     XmlType;
+      exists_item_   NUMBER;
+  BEGIN
+      IF path_ IS NULL THEN
+          RETURN TRUE;
+      ELSE
+          full_path_ := Full_Path( path_ );
+          /*
+          SELECT Extract( xml_, full_path_, xml_namespace_ )
+            INTO tmp_xml_
+            FROM dual;
+          RETURN tmp_xml_ IS NOT NULL;
+          */
+          SELECT ExistsNode( xml_, full_path_, xml_namespace_ )
+            INTO exists_item_
+            FROM dual;
+          RETURN  exists_item_  = 1;
+      END IF;
+  END;
+
+  MEMBER  FUNCTION Attr_Record( path_ IN VARCHAR2 ) RETURN Attr_Obj IS
+      attr_       Attr_Obj;
+      full_path_  VARCHAR2(2000);
+      tmp_xml_    CLOB;
+  BEGIN
+      attr_ := Attr_Obj();
+      IF path_ IS NULL THEN
+          tmp_xml_ := xml_.getClobVal();
+          attr_.From_XML( tmp_xml_, xml_path_ );
+      ELSE
+          full_path_ := Full_Path( path_ );
+          SELECT Extract( xml_, full_path_, xml_namespace_ ).getClobVal()
+            INTO tmp_xml_
+            FROM dual;
+          IF tmp_xml_ IS NULL THEN
+              IF fnd_Api.Log_Is_On() AND substr(full_path_, length(full_path_)-5 ) != 'RETURN' THEN
+                  fnd_Api.log( '*************** ERROR PATH ***************' );
+                  fnd_Api.log( 'full_path_', full_path_ );
+                  fnd_Api.log( 'xml_namespace_', xml_namespace_ );
+                  fnd_Api.log( xml_.getClobVal() );
+              END IF;
+              RETURN NULL;
+          ELSE
+              attr_.From_XML( tmp_xml_ );
+          END IF;
+      END IF;
+      IF NOT attr_.IsEmpty() THEN
+         RETURN attr_.Get_Record( attr_.names_(1) );
+      ELSE
+         RETURN NULL;
+      END IF;
+  END;
+
+  MEMBER  FUNCTION Attr_Table ( path_ IN VARCHAR2 ) RETURN Attr_Tab PIPELINED IS
+      attr_          Attr_Obj;
+      exists_item_   NUMBER;
+      full_path_     VARCHAR2(2000);
+  BEGIN
+      IF UPPER(path_) = '_VALUES_' THEN
+          attr_ := Attr_Obj();
+          FOR r_ IN ( SELECT * FROM TABLE( self.Get_Values() ) ) LOOP
+              attr_.Clear();
+              attr_.Set_('STR_1', r_.str_1);
+              attr_.Set_('STR_2', r_.str_2);
+              PIPE ROW(attr_);
+          END LOOP;
+          RETURN;
+      ELSIF UPPER(path_) = '_STRUCT_' THEN
+          attr_ := Attr_Obj();
+          FOR r_ IN ( SELECT * FROM TABLE( self.Get_Struct() ) ) LOOP
+              attr_.Clear();
+              attr_.Set_('STR_1', r_.column_value);
+              PIPE ROW(attr_);
+          END LOOP;
+          RETURN;
+      END IF;
+
+
+      full_path_ := Full_Path( path_ );
+      SELECT ExistsNode( xml_, full_path_||'/'||xml_item_str_, xml_namespace_)
+        INTO exists_item_
+        FROM dual;
+      IF exists_item_  = 1 THEN
+          attr_ := Attr_Obj();
+          FOR r_ IN ( SELECT l.GetCLOBVal() item_clob
+                        FROM TABLE (xmlsequence (extract (xml_, full_path_||'/'||xml_item_str_, xml_namespace_ ))) l
+                     ) LOOP
+              attr_.Clear();
+              attr_.From_Xml( r_.item_clob, '/'||xml_item_str_ );
+              PIPE ROW(attr_);
+          END LOOP;
+      ELSE
+          attr_ := Attr_Record(path_);
+          IF attr_ IS NOT NULL THEN
+             PIPE ROW( attr_ );
+          END IF;
+      END IF;
+  END;
+
+  MEMBER  FUNCTION AttrS_Table ( path_ IN VARCHAR2 ) RETURN AttrS_Tab PIPELINED IS
+      attr_          Attr_Obj;
+      attrs_         AttrS_Obj;
+      exists_item_   NUMBER;
+      full_path_     VARCHAR2(2000);
+  BEGIN
+
+      full_path_ := Full_Path( path_ );
+      SELECT ExistsNode( xml_, full_path_||'/'||xml_item_str_, xml_namespace_)
+        INTO exists_item_
+        FROM dual;
+      IF exists_item_  = 1 THEN
+          attr_ := Attr_Obj();
+          attrs_ := AttrS_Obj();
+          FOR r_ IN ( SELECT l.GetCLOBVal() item_clob
+                        FROM TABLE (xmlsequence (extract (xml_, full_path_||'/'||xml_item_str_, xml_namespace_ ))) l
+                     ) LOOP
+              attr_.Clear();
+              attr_.From_Xml( r_.item_clob, '/'||xml_item_str_ );
+              attrs_.Copy_From( attr_ );
+              PIPE ROW(attrs_);
+          END LOOP;
+      ELSE
+          attr_ := Attr_Record(path_);
+          IF attr_ IS NOT NULL THEN
+             attrs_ := AttrS_Obj();
+             attrs_.Copy_From( attr_ );
+             PIPE ROW( attrs_ );
+          END IF;
+      END IF;
+  END;
+
+  MEMBER  FUNCTION Get_Struct RETURN string_tab PIPELINED IS
+
+    CURSOR get_values_ IS
+    SELECT element_path
+    FROM (
+            SELECT element_path, rownum num
+            FROM
+              XMLTable(
+                '
+                  for $i in $doc/descendant-or-self::*
+                    return <element>
+                             <element_path> {$i/string-join(ancestor-or-self::*/name(.), ''/'')} </element_path>
+                           </element>
+                '
+                passing xml_ as "doc"
+                columns
+                  element_path   varchar2(4000) path '//element_path'
+              )
+         )
+    GROUP BY element_path
+    ORDER BY MIN(num);
+
+  BEGIN
+      FOR r_ IN get_values_ LOOP
+          PIPE ROW( substr(r_.element_path,1,256) );
+      END LOOP;
+  END;
+
+  MEMBER  FUNCTION Get_Values RETURN two_string_tab PIPELINED IS
+
+    CURSOR get_values_ IS
+    SELECT element_path, element_text
+    FROM
+      XMLTable(
+        '
+          for $i in $doc/descendant-or-self::*
+            return <element>
+                     <element_path> {$i/string-join(ancestor-or-self::*/name(.), ''/'')} </element_path>
+                     <element_content> {$i/text()}</element_content>
+                   </element>
+        '
+        passing xml_ as "doc"
+        columns
+          element_path   varchar2(4000) path '//element_path',
+          element_text   varchar2(4000) path '//element_content'
+      );
+
+  BEGIN
+      FOR r_ IN get_values_ LOOP
+          PIPE ROW( two_string_rec( substr(r_.element_path,1,256) , substr(r_.element_text,1,256) ) );
+      END LOOP;
+  END;
+
+  MEMBER  FUNCTION To_Clob RETURN CLOB IS
+  BEGIN
+      RETURN xml_path_||chr(31)||xml_namespace_||chr(31)||xml_item_str_||chr(31)||xml_.getClobVal();
+  END;
+
+
+  MEMBER  PROCEDURE From_Clob( clob_ IN CLOB ) IS
+     start_     NUMBER;
+     stop_      NUMBER;
+     tmp_       VARCHAR2(5000);
+     tmp_clob_  CLOB;
+  BEGIN
+     tmp_ := substr( clob_, 1, 5000 );
+     start_:= 1;
+     stop_ := instr( tmp_, chr(31), start_ );
+     xml_path_ := substr( tmp_, start_, stop_ -1 );
+     start_ := stop_ + 1;
+     stop_ := instr( tmp_, chr(31), start_ );
+     xml_namespace_ := substr( tmp_, start_, stop_ -1 );
+     start_ := stop_ + 1;
+     stop_ := instr( tmp_, chr(31), start_ );
+     xml_item_str_ := substr( tmp_, start_, stop_ -1 );
+     
+     tmp_clob_ := clob_;
+     stop_ := stop_ + 1;
+     DBMS_LOB.ERASE( tmp_clob_, stop_  );
+     xml_ := XMLType( tmp_clob_ );
+  END;
+
+end;
+/

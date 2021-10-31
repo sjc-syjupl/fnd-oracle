@@ -1,0 +1,177 @@
+CREATE OR REPLACE PACKAGE body Error_Api is
+
+  PROCEDURE Record_Not_Exist ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL ) IS
+  BEGIN
+      Error( 'Error_Api.RECNOTEXISTS', 'W tabeli :P1 rekord :P2 nie istnieje.', package_name_, key_ );
+  END;
+
+  PROCEDURE Record_Exist ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL ) IS
+  BEGIN
+      Error( 'Error_Api.RECNOTEXISTS', 'W tabeli :P1 rekord :P2 już istnieje.', package_name_, key_ );
+  END;
+
+  PROCEDURE Record_Modified  ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL ) IS
+      text_ VARCHAR2(2000);
+  BEGIN
+      Error( 'Error_Api.RECMODIFIED', 'W tabeli :P1 rekord :P2 został zmodyfikowany przez innego użytkownika.', package_name_, key_ );
+  END;
+
+  PROCEDURE Record_Locked  ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL ) IS
+      text_ VARCHAR2(2000);
+  BEGIN
+      Error( 'Error_Api.LOCKED', 'W tabeli :P1 rekord :P2 został zablokowany przez innego użytkownika.', package_name_, key_ );
+  END;
+
+  PROCEDURE Column_Is_Null   ( package_name_ IN VARCHAR2, key_ IN VARCHAR2 ) IS
+  BEGIN
+      Error( 'Error_Api.NULLCOLUMN', 'W tabeli :P1 pole :P2 nie może być puste.', package_name_, key_ );
+  END;
+
+  PROCEDURE Error ( text_id_ IN VARCHAR2,
+                    text_ IN VARCHAR2,
+                    p1_  IN VARCHAR2 DEFAULT NULL,
+                    p2_  IN VARCHAR2 DEFAULT NULL,
+                    p3_  IN VARCHAR2 DEFAULT NULL ) IS
+      str_       VARCHAR2(4000);
+      error_id_  NUMBER;
+  BEGIN
+      str_ := FND_API.Tr( text_id_, text_, p1_, p2_, p3_ );
+      IF FND_API.Log_Is_On() THEN
+          FND_API.Log_Stack();
+          FND_API.Log( str_ );
+      END IF;
+      error_id_ := Start_Log_Error( str_ );
+      raise_application_error(-20111, str_ );
+  END;
+
+
+  -------------------------------------------------------------------------------------
+  ------------------------------   LOG_ERROR  -----------------------------------------
+  -------------------------------------------------------------------------------------
+
+  FUNCTION  Start_Log_Error( error_msg_ IN VARCHAR2 ) RETURN NUMBER IS  -- error_id_
+      error_id_  NUMBER;
+      stack_     FND_Api.List;
+      num_       NUMBER;
+      package_   VARCHAR2(50);
+      line_nr_   VARCHAR2(50);
+      line_      VARCHAR2(4000);
+      
+      CURSOR get_line( name_ IN VARCHAR2, type_ IN VARCHAR2, line_ IN NUMBER ) IS
+      SELECT text 
+        FROM user_source
+       WHERE NAME = name_
+         AND TYPE = type_
+         AND line = line_;
+  BEGIN
+      error_id_ := FND_LOG_SEQ.nextval;
+      Log(error_id_, '');
+      Log(error_id_, '******************************************************');
+      Log(error_id_, error_msg_);
+      --Log(error_id_,  DBMS_UTILITY.FORMAT_CALL_STACK() );
+      stack_ := FND_API.Split( replace(DBMS_UTILITY.FORMAT_CALL_STACK(),chr(13),'')  , chr(10) );
+      FOR i_ IN 1..stack_.count LOOP
+          IF stack_(i_) LIKE '%package body%' THEN
+              num_ := instr( stack_(i_), 'package body');
+              package_ := trim( substr( stack_(i_), num_+12) );
+              line_nr_ := trim( substr( stack_(i_), num_-8, 8) );
+              line_ := NULL;
+              OPEN get_line( REPLACE(upper(package_),'BMS.', ''), 'PACKAGE BODY', line_nr_ );
+              FETCH get_line INTO line_;
+              CLOSE get_line;
+              Log(error_id_,  rpad(stack_(i_),100)||line_ );
+          ELSE
+              Log(error_id_,  rpad(stack_(i_),100) );
+          END IF;
+      END LOOP;
+      Log(error_id_, '----- END   Call Stack -----');
+      Log(error_id_, 'ENV_ID: '|| FND_API.environment_id_ ||' USER_ID: '|| FND_API.curr_user_id_|| ' DATE: '||to_char(SYSDATE,'YYYY-MM-DD hh24:mi:ss') );
+      RETURN error_id_;
+  END;
+  
+  PROCEDURE Log( error_id_ IN NUMBER, value_ IN VARCHAR2, p1_ IN VARCHAR2 DEFAULT NULL, p2_ IN VARCHAR2 DEFAULT NULL, p3_ IN VARCHAR2 DEFAULT NULL ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      text_   VARCHAR2(32767);
+      i_      NUMBER;
+  BEGIN
+      IF (p1_ IS NOT NULL) OR (p2_ IS NOT NULL) OR (p3_ IS NOT NULL) THEN
+          IF instr( value_, ':P1') <= 0 THEN
+              Log( error_id_, 
+                   value_ || CASE WHEN p1_ IS NOT NULL THEN ': '||p1_||' ' ELSE '' END
+                          || CASE WHEN p2_ IS NOT NULL THEN ': '||p2_||' ' ELSE '' END
+                          || CASE WHEN p3_ IS NOT NULL THEN ': '||p3_||' ' ELSE '' END );
+              COMMIT;
+              RETURN;
+          END IF;
+          text_ := REPLACE(REPLACE(REPLACE( value_, ':P1', p1_), ':P2', p2_), ':P3', p3_);
+      ELSE 
+          text_ := value_;
+      END IF;
+      IF length( text_ ) <= 100 THEN
+          INSERT INTO FND_ERROR_TAB
+              (error_id, log_id, text, rowversion)
+          VALUES
+              (error_id_, FND_LOG_SEQ.nextval, text_, SYSDATE);
+      ELSE
+          WHILE text_ IS NOT NULL LOOP
+              i_ := instr( text_, chr(10) );
+              IF i_ < 1 OR i_ > 1000 THEN
+                 i_ := 1000;
+              END IF;
+              INSERT INTO FND_ERROR_TAB
+                  (error_id, log_id, text, rowversion)
+              VALUES
+                  (error_id_, FND_LOG_SEQ.nextval, substr( text_, 1, i_ ), SYSDATE);
+              text_ := substr( text_, i_+1 );
+          END LOOP;
+      END IF;
+      COMMIT;
+  END;
+  
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN Attr_Obj ) IS
+      attr_  Attr_Obj;
+  BEGIN
+      IF param_ IS NOT NULL THEN
+          attr_ := Attr_obj();
+          attr_.Copy_From( param_ );
+          attr_.Log_Error( error_id_, name_ );
+      END IF;
+  END;
+
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN AttrS_Obj ) IS
+      attr_  AttrS_Obj;
+  BEGIN
+      IF param_ IS NOT NULL THEN
+          attr_ := AttrS_obj();
+          attr_.Copy_From( param_ );
+          attr_.Log_Error( error_id_, name_ );
+      END IF;
+  END;
+
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN Attr_Tab ) IS
+      attr_  Attr_Obj;
+  BEGIN
+      IF param_ IS NOT NULL THEN
+          Error_Api.Log( error_id_, name_||'=><<TABLE>>' );
+          FOR j_ IN 1..param_.count LOOP
+             Error_Api.Log( error_id_, name_||'=><<ITEM '||j_||'>>' );
+             attr_ := Attr_obj();
+             attr_.Copy_From(param_(j_) );
+             attr_.Log_Error( error_id_, '      '); 
+          END LOOP;
+          Error_Api.Log( error_id_, name_||'=><<TABLE END>>' );
+      END IF;
+  END;
+
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN CLOB ) IS
+  BEGIN
+      Log( error_id_, name_, to_char(param_) );
+  END;
+
+
+end Error_Api;
+/

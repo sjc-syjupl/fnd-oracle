@@ -1,0 +1,312 @@
+CREATE OR REPLACE PACKAGE FND_Api is
+
+   date_format_        CONSTANT VARCHAR2(30) := 'YYYY-MM-DD HH24.MI.SS';
+   field_separator_    CONSTANT VARCHAR2(1)  := chr(31);
+   record_separator_   CONSTANT VARCHAR2(1)  := chr(30);
+   group_separator_    CONSTANT VARCHAR2(1)  := chr(29);
+   file_separator_     CONSTANT VARCHAR2(1)  := chr(28);
+
+   curr_user_id_      VARCHAR2(35) := '';
+   environment_id_    VARCHAR2(35) := '_';
+   
+  -------------------------------------------------------------------------------------
+  ------------------------------  Split/Join ------------------------------------------
+  -------------------------------------------------------------------------------------
+   
+   TYPE LIST IS TABLE OF VARCHAR2(2000) INDEX BY PLS_INTEGER;
+   TYPE DIC  IS TABLE OF VARCHAR2(2000) INDEX BY VARCHAR2(50);
+
+   FUNCTION Split     ( text_ IN VARCHAR2, sep_field_  IN VARCHAR2 DEFAULT record_separator_ ) RETURN LIST;
+   FUNCTION Split_Trim( text_ IN VARCHAR2, sep_field_  IN VARCHAR2 DEFAULT record_separator_ ) RETURN LIST;
+   FUNCTION Split_Dic ( text_ IN VARCHAR2, sep_record_ IN VARCHAR2 DEFAULT record_separator_, sep_field_ IN VARCHAR2 DEFAULT field_separator_ ) RETURN DIC;
+   FUNCTION Split_    ( text_ IN VARCHAR2, sep_field_  IN VARCHAR2 DEFAULT record_separator_ ) RETURN String_Tab;
+
+   FUNCTION JOIN( list_ IN LIST , sep_ IN VARCHAR2 DEFAULT record_separator_ ) RETURN VARCHAR2;
+   FUNCTION JOIN( dic_  IN DIC ,  sep_record_ IN VARCHAR2 DEFAULT record_separator_, sep_field_ IN VARCHAR2 DEFAULT field_separator_ ) RETURN VARCHAR2;
+
+
+/* Examples 
+
+   DECLARE
+       list_   FND_Api.List;
+       str_    VARCHAR2(2000);
+   BEGIN
+       str_  := 'Planned^Released^Delivered^Closed';
+       list_ := FND_Api.Split( str_, '^' );
+       FOR i_ IN 1..list_.count LOOP
+           DBMS_output.put_line( list_(i_) );
+       END LOOP;
+   END; 
+
+   DECLARE
+       dic_     FND_Api.DIC;
+       attr_    VARCHAR2(2000);
+   BEGIN
+       dic_('COMPANY') := '01';        -- Client_SYS( 'COMPANY', '01', attr_ );
+       dic_('INVOICE_ID') := 12345;    -- Client_SYS( 'INVOICE_ID', 12345, attr_ );
+       dic_('NOTE') := 'Uwagi';        -- Client_SYS( 'NOTE', 'Uwagi', attr_ );
+       attr_ := FND_Api.Join( dic_ );
+       DBMS_output.put_line( attr_ );           
+   END; 
+*/   
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  Exist Object ----------------------------------------
+  -------------------------------------------------------------------------------------
+
+   FUNCTION Exist_Package  ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN;
+   FUNCTION Exist_View     ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN;
+   FUNCTION Exist_Table    ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN;
+   FUNCTION Exist_Sequence ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN;
+   FUNCTION Exist_Object   ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN;
+   FUNCTION Exist_Method   ( package_name_ IN VARCHAR2, method_name_ IN VARCHAR2 ) RETURN BOOLEAN;
+   
+  -------------------------------------------------------------------------------------
+  ------------------------------  LOG  ------------------------------------------------
+  -------------------------------------------------------------------------------------
+
+  PROCEDURE Log_On( size_ IN NUMBER DEFAULT NULL );  -- size => DBMS_output
+  PROCEDURE Log_Off;
+  PROCEDURE Log_Tab_On;                              -- save log into to table ( AUTONOMOUS_TRANSACTION )
+  FUNCTION  Log_Is_On RETURN BOOLEAN;                -- check if log is enable
+  
+  PROCEDURE Log( value_ IN VARCHAR2, p1_ IN VARCHAR2 DEFAULT NULL, p2_ IN VARCHAR2 DEFAULT NULL, p3_ IN VARCHAR2 DEFAULT NULL  );
+  PROCEDURE Log( value_ IN NUMBER );
+  PROCEDURE Log( value_ IN DATE );
+  PROCEDURE Log( value_ IN BOOLEAN );
+  PROCEDURE Log( value_ IN CLOB );
+  
+  PROCEDURE Log( name_ IN VARCHAR2, value_ IN NUMBER );
+  PROCEDURE Log( name_ IN VARCHAR2, value_ IN DATE );
+  PROCEDURE Log( name_ IN VARCHAR2, value_ IN BOOLEAN );
+
+  PROCEDURE Log_Call_Method( package_ IN VARCHAR2, method_ IN VARCHAR2 );  -- logging information that procedure is executing
+  PROCEDURE Log_Stack;                                                     -- write in log current call stack
+/* 
+   DECLARE
+   BEGIN
+       FND_Api.Log_On();
+       FND_Api.Log( 'przykladowy tekst' );  -- log to output
+   END; 
+*/
+  
+  PROCEDURE Time_Start( name_ IN VARCHAR2 );
+  PROCEDURE Time_Stop ( name_ IN VARCHAR2 );
+/* 
+   DECLARE
+   BEGIN
+       FND_Api.Time_Start('WEB_SERVICE');
+       Web_Service_API.Call ...
+       FND_Api.Time_Stop('WEB_SERVICE');
+           -- Adds one line to log
+           --     *** WEB_SERVICE TIME = 4 sec. ***
+   END; 
+*/
+
+  -------------------------------------------------------------------------------------
+  --------------------------   User/Session  ------------------------------------------
+  -------------------------------------------------------------------------------------
+  PROCEDURE Init( env_id_ IN VARCHAR2, user_id_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Clear;
+
+  PROCEDURE Set_Env( env_id_ IN VARCHAR2 );
+  PROCEDURE Clear_Env;
+
+  PROCEDURE Set_User( user_id_ IN VARCHAR2 );
+  PROCEDURE Clear_User;
+  --  DECLARE BEGIN  FND_Api.Set_User( :userId ); END;
+  --  DECLARE BEGIN  FND_Api.Clear_User(); END;
+  
+  PROCEDURE Set_User_Property( name_ IN VARCHAR2, value_ IN VARCHAR2 );
+  FUNCTION  Get_User_Property( name_ IN VARCHAR2 ) RETURN VARCHAR2;
+
+  PROCEDURE Set_Global_Property( name_ IN VARCHAR2, value_ IN VARCHAR2 );
+  FUNCTION  Get_Global_Property( name_ IN VARCHAR2 ) RETURN VARCHAR2;
+
+  PROCEDURE Set_Property( property_type_ IN VARCHAR2, property_id_ IN VARCHAR2, name_ IN VARCHAR2, value_ IN VARCHAR2 );
+  FUNCTION  Get_Property( property_type_ IN VARCHAR2, property_id_ IN VARCHAR2, name_ IN VARCHAR2) RETURN VARCHAR2;
+  FUNCTION  Get_Property( name_ IN VARCHAR2) RETURN VARCHAR2;  -- try find in user_property and then in global_property
+
+  PROCEDURE Set_User_Session_Id( value_ IN NUMBER );
+  FUNCTION  Get_User_Session_Id RETURN NUMBER;
+  PROCEDURE Check_User_Session_Id( value_ IN NUMBER );
+  
+  ----
+
+  PROCEDURE Save_Attr ( attr_ IN Attr_Obj,  session_id_ IN NUMBER, name_ IN VARCHAR2 );
+  PROCEDURE Save_AttrS( attr_ IN AttrS_Obj, session_id_ IN NUMBER, name_ IN VARCHAR2 );
+  FUNCTION  Read_Attr ( session_id_ IN NUMBER, name_ IN VARCHAR2 ) RETURN Attr_Obj;
+  FUNCTION  Read_AttrS( session_id_ IN NUMBER, name_ IN VARCHAR2 ) RETURN AttrS_Obj;
+  
+  ----
+
+  FUNCTION  Start_Session RETURN NUMBER;
+  PROCEDURE Stop_Session ( session_id_ IN NUMBER );                -- clear session temporary data
+  FUNCTION  Stop_Session_( session_id_ IN NUMBER ) RETURN NUMBER;  -- clear session temporary data
+
+  PROCEDURE Set_Session_Property( session_id_ IN NUMBER, name_ IN VARCHAR2, value_ IN VARCHAR2 );
+  FUNCTION  Get_Session_Property( session_id_ IN NUMBER, name_ IN VARCHAR2 ) RETURN VARCHAR2;
+
+  ----
+
+  FUNCTION Changed_Value( name_ IN VARCHAR2, val1_ IN VARCHAR2, val2_ IN VARCHAR2, val3_ IN VARCHAR2 DEFAULT NULL,
+                          val4_ IN VARCHAR2 DEFAULT NULL, val5_ IN VARCHAR2 DEFAULT NULL ) RETURN NUMBER;
+
+  -------------------------------------------------------------------------------------
+  -------------------------   Background Job  -----------------------------------------
+  -------------------------   External Program ----------------------------------------
+  -------------------------------------------------------------------------------------
+  
+  FUNCTION  Background_Exec ( procedure_name_ IN VARCHAR2,                               -- return session_id 
+                        param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                        param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL ) RETURN NUMBER;
+  PROCEDURE Background_Exec_( session_id_ IN NUMBER, procedure_name_ IN VARCHAR2,        -- if session_id already exists
+                        param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                        param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Background_Exec_       ( session_id_ IN NUMBER );                            -- try reexecute job
+  PROCEDURE Background_Exec_Online ( session_id_ IN NUMBER, force_exec_ IN BOOLEAN DEFAULT FALSE );    -- execute job online
+   
+
+  FUNCTION  External_Exec( command_ IN VARCHAR2,
+                          param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                          param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL,
+                          attr_ IN Attr_Obj DEFAULT NULL ) RETURN Attr_Obj;
+  PROCEDURE External_Exec_( session_id_ IN NUMBER, command_ IN VARCHAR2,
+                          param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                          param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL,
+                          attr_ IN Attr_Obj DEFAULT NULL  );  
+  FUNCTION  Generate_Pdf ( doc_name_ IN VARCHAR2, bookmarks_ IN Attr_Obj DEFAULT NULL ) RETURN BLOB;
+  FUNCTION  Generate_Pdf_( doc_name_ IN VARCHAR2, filename_ IN VARCHAR2, bookmarks_ IN Attr_Obj ) RETURN NUMBER;  --session_id
+  /*
+SELECT d.s01         "filename",
+       b.blob_data   "data"
+ FROM BMS.FND_SESSION_DATA_TAB d, BMS.FND_SESSION_DATA_BLOB_TAB b
+WHERE d.session_id = BMS.FND_Api.Stop_Session_( 123 )
+  AND d.session_id = b.session_id
+  AND d.row_no = b.row_no
+  */
+
+  
+  FUNCTION  Background_Get_State( session_id_ IN NUMBER ) RETURN VARCHAR2;      -- NONE / POSTED / EXECUTING / READY / ERROR
+  FUNCTION  Background_Get_Error( session_id_ IN NUMBER ) RETURN VARCHAR2;
+  
+  PROCEDURE Background_Wait_For_Job( session_id_ IN NUMBER, throw_error_ IN VARCHAR2 DEFAULT 'N' );  -- Y/N
+  PROCEDURE Background_Clean( session_id_ IN NUMBER );
+  PROCEDURE Background_Clean_Unused;  -- after 7 days executed job will be deleted 
+
+/*
+  DECLARE
+      session_id_ NUMBER;
+  BEGIN
+      session_id_ := FND_Api.Background_Exec( 
+         q'[
+         DECLARE 
+         BEGIN 
+             INSERT INTO BMS.FND_SESSION_DATA_TAB
+                (SESSION_ID, DATA_TYPE, ROW_NO, S01, S02)
+             SELECT :SESSION_ID, 'TEST', ROWNUM, 'Test data', :param1
+               FROM dual;
+         END;
+         ]', param1_ => 'Test data2' 
+        ); 
+  END; 
+  
+  
+  DECLARE
+      session_id_ NUMBER;
+      param1_     Attr_Obj;
+      param2_     Attr_Obj;
+      param3_     Attr_Obj;
+  BEGIN
+      session_id_ := FND_Api.Start_Session();
+      FND_Api.Background_Save_Attr( session_id_, 'PARAM1', param1_ );
+      FND_Api.Background_Save_Attr( session_id_, 'PARAM2', param2_ );
+      FND_Api.Background_Save_Attr( session_id_, 'PARAM3', param3_ );
+      FND_Api.Background_Exec_( session_id_,
+         q'[
+         DECLARE 
+             param1_ Attr_Obj;
+             param2_ Attr_Obj;
+             param3_ Attr_Obj;
+         BEGIN 
+             param1_ := FND_Api.Background_Read_Attr( :session_id, 'PARAM1');
+             param2_ := FND_Api.Background_Read_Attr( :session_id, 'PARAM2');
+             param3_ := FND_Api.Background_Read_Attr( :session_id, 'PARAM3');
+             --...  Some PL/SQL code ...
+         END;
+         ]', param1_ => 'Test data2' 
+        );
+      FND_Api.Background_Wait_For_Job( session_id_ );
+      IF FND_Api.Background_Get_State( session_id_ ) = 'ERROR' THEN
+          DBMS_output.put_line( FND_Api.Background_Get_Error( session_id_ ) );
+      END IF;
+      FND_Api.Background_Clean( session_id_ );
+  END;    
+*/    
+
+  -------------------------------------------------------------------------------------
+  -------------------------   File  -----------------------------------------
+  -------------------------------------------------------------------------------------
+
+  PROCEDURE Write_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2, data_ IN VARCHAR2);
+  PROCEDURE Write_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2, data_ IN CLOB);
+  PROCEDURE Write_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2, data_ IN BLOB);
+
+  FUNCTION  Read_File ( dir_ IN VARCHAR2, file_name_ IN VARCHAR2) RETURN VARCHAR2;
+  FUNCTION  Read_CFile( dir_ IN VARCHAR2, file_name_ IN VARCHAR2) RETURN CLOB;
+  FUNCTION  Read_BFile( dir_ IN VARCHAR2, file_name_ IN VARCHAR2) RETURN BLOB;
+
+  PROCEDURE Delete_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2);
+  FUNCTION  File_Exists( dir_ IN VARCHAR2, file_name_ IN VARCHAR2) RETURN BOOLEAN;
+  FUNCTION  File_List  ( dir_ IN VARCHAR2, file_mask_ IN VARCHAR2 DEFAULT '%') RETURN String_tab;
+  
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  Translate -------------------------------------------
+  -------------------------------------------------------------------------------------
+
+  PROCEDURE Set_Lang( lang_ IN VARCHAR2 );
+  FUNCTION  Get_Lang RETURN VARCHAR2;
+  
+  FUNCTION Tr( text_id_ IN VARCHAR2,
+               text_    IN VARCHAR2, 
+               p1_      IN VARCHAR2 DEFAULT NULL, 
+               p2_      IN VARCHAR2 DEFAULT NULL, 
+               p3_      IN VARCHAR2 DEFAULT NULL, 
+               lang_    IN VARCHAR2 DEFAULT NULL ) RETURN VARCHAR2;
+/* 
+   Na razie nie zaimplementowane.
+   Pierwszy parametr text_id_ to identyfikator tekstu, bedzie s3u?y3 do odszukania i wyowietlenia tekstu w innym jezyku.
+  
+   DECLARE
+       error_text_   VARCHAR2(2000);
+   BEGIN
+       error_text_ := FND_Api.Tr( 'ERR_STATE', 'B3edny status' );
+   END; 
+*/
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  Util ------------------------------------------------
+  -------------------------------------------------------------------------------------
+
+  PROCEDURE Set_Session_Info( module_ IN VARCHAR2, action_ IN VARCHAR2, client_info_ IN VARCHAR2 );
+  -- you can watch this text in session list
+
+  FUNCTION  Str_To_Date( date_str_ IN VARCHAR2 ) RETURN DATE;
+  FUNCTION  Str_To_Number( number_str_ IN VARCHAR2 ) RETURN NUMBER;
+  PROCEDURE COMPILE( object_name_ IN VARCHAR2 DEFAULT '%' );
+
+  FUNCTION Parse_Parameter ( value_ IN VARCHAR2, parameter_ IN VARCHAR2 ) RETURN VARCHAR2;
+  -- SELECT ... FROM ...  WHERE FND_Api.Parse_Parameter( value_, 'A%;B%' ) = 'TRUE'
+
+  FUNCTION  Random( max_num_ NUMBER DEFAULT NULL ) RETURN NUMBER;
+  
+  FUNCTION Attr_Obj_  RETURN Attr_Obj;
+  FUNCTION AttrS_Obj_ RETURN AttrS_Obj;
+  FUNCTION Attr_Tab_  RETURN Attr_Tab;
+
+  FUNCTION Attr_Record( xml_ IN OUT NOCOPY Xml_Obj, path_ IN VARCHAR2 ) RETURN Attr_Obj;
+  FUNCTION Attr_Get( attr_ IN Attr_Obj, name_ IN VARCHAR2 ) RETURN VARCHAR2; 
+  
+end FND_Api;
+/

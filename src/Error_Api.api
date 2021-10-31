@@ -1,0 +1,33 @@
+CREATE OR REPLACE PACKAGE Error_Api IS
+
+  PROCEDURE Record_Not_Exist ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Record_Modified  ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Record_Locked    ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Record_Exist     ( package_name_ IN VARCHAR2, key_ IN VARCHAR2,
+                               key2_ IN VARCHAR2 DEFAULT NULL, key3_ IN VARCHAR2 DEFAULT NULL, key4_ IN VARCHAR2 DEFAULT NULL, key5_ IN VARCHAR2 DEFAULT NULL );
+
+  PROCEDURE Column_Is_Null   ( package_name_ IN VARCHAR2, key_ IN VARCHAR2 );
+
+  PROCEDURE Error ( text_id_ IN VARCHAR2,
+                    text_ IN VARCHAR2,
+                    p1_  IN VARCHAR2 DEFAULT NULL,
+                    p2_  IN VARCHAR2 DEFAULT NULL,
+                    p3_  IN VARCHAR2 DEFAULT NULL );
+
+  -------------------------------------------------------------------------------------
+  ------------------------------   LOG_ERROR  -----------------------------------------
+  -------------------------------------------------------------------------------------
+
+  FUNCTION  Start_Log_Error( error_msg_ IN VARCHAR2 ) RETURN NUMBER;  -- error_id_
+  PROCEDURE Log( error_id_ IN NUMBER, value_ IN VARCHAR2, p1_ IN VARCHAR2 DEFAULT NULL, p2_ IN VARCHAR2 DEFAULT NULL, p3_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN Attr_Obj );
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN AttrS_Obj );
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN Attr_Tab );
+  PROCEDURE Log( error_id_ IN NUMBER, name_ IN VARCHAR2, param_ IN CLOB );
+  
+
+end Error_Api;
+/

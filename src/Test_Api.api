@@ -1,0 +1,30 @@
+create or replace package Test_Api is
+
+  PROCEDURE Test_All;
+  
+/*
+
+DECLARE
+BEGIN
+    fnd_API.Log_On(); 
+    Test_Api.Test_All();
+END; 
+  
+
+
+SELECT *
+FROM fnd_BACKGROUND_JOB_TAB;
+
+SELECT *
+FROM all_scheduler_jobs
+
+BEGIN
+  --DBMS_scheduler.drop_job(job_name => 'SESSION_ID_1');
+  DBMS_scheduler.stop_job(job_name => 'SESSION_ID_240');
+  DBMS_scheduler.drop_job(job_name => 'SESSION_ID_240');
+END;
+
+*/
+  
+end Test_Api;
+/

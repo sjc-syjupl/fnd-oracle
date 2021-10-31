@@ -1,0 +1,129 @@
+create or replace package body Test_Api is
+
+  PROCEDURE Test_Background_01 IS
+      session_id_ NUMBER;
+      param1_     Attr_Obj;
+      param2_     Attr_Obj;
+      param3_     AttrS_Obj;
+      copy_param1_     Attr_Obj;
+      copy_param2_     Attr_Obj;
+      copy_param3_     AttrS_Obj;
+      tab_             Attr_Api.Attr_Tab_;
+      clob_            CLOB;  
+  BEGIN
+      session_id_ := fnd_Api.Start_Session();
+      param1_ := Attr_Obj();
+      param2_ := Attr_Obj();
+      param3_ := AttrS_Obj();
+      
+      param1_.Add_( 'TEST01', 'test'||chr(13)||chr(10)||'01');
+      param1_.Add_( 'TEST02', 'test02');
+      param1_.Add_( 'TEST03', 'test03'||chr(13)||chr(10)||'�����ʳ����џ��� ');
+      clob_ := 'test CLOB'||chr(13)||chr(10)||'�����ʳ����џ��� ';
+      param1_.Add_( 'TEST_CLOB', clob_);
+
+      param2_.Add_( 'TEST01', 'test01');
+      param2_.Add_( 'TEST02', 123);
+      param2_.Add_( 'TEST03', SYSDATE);
+
+      param1_.Add_( 'TEST_REC', param2_);
+      tab_ := Attr_Api.Attr_Tab_();
+      tab_.Extend(2);
+      tab_(1) := param1_;
+      tab_(2) := param2_;
+      Attr_API.Add_Attr_Table( param1_, 'TEST_TAB', tab_ );
+      
+      
+      param3_.Add_( 'TEST01', 'test01');
+      param3_.Add_( 'TEST02', 'test02');
+      param3_.Add_( 'TEST03', 'test03');
+      
+      fnd_Api.Save_Attr( param1_, session_id_, 'PARAM1');
+      param2_.Save_To_Session( session_id_, 'PARAM2' );
+      param3_.Save_To_Session( session_id_, 'PARAM3' );
+      fnd_Api.Background_Exec_( session_id_,
+         q'[
+ DECLARE 
+     param1_ Attr_Obj;
+     param2_ Attr_Obj;
+     param3_ AttrS_Obj;
+ BEGIN 
+     param1_ := fnd_Api.Read_Attr( :session_id, 'PARAM1');
+     param2_ := fnd_Api.Read_Attr( :session_id, 'PARAM2');
+     param3_ := fnd_Api.Read_AttrS( :session_id, 'PARAM3');
+
+     INSERT INTO BMS.fnd_SESSION_DATA_TAB
+        (SESSION_ID, DATA_TYPE, ROW_NO, S01, S02)
+     SELECT :SESSION_ID, 'TEST', ROWNUM, 'Test data', :param1
+       FROM dual;
+             
+     param1_.Save_To_Session( :session_id, 'COPY_PARAM1' );
+     fnd_Api.Save_Attr ( param2_, :session_id, 'COPY_PARAM2' );
+     fnd_Api.Save_AttrS( param3_, :session_id, 'COPY_PARAM3' );
+ END;
+         ]', param1_ => 'Test data2' 
+        );
+      fnd_Api.Background_Wait_For_Job( session_id_ );
+      IF fnd_Api.Background_Get_State( session_id_ ) = 'ERROR' THEN
+          Error_Api.Error('TEST', fnd_Api.Background_Get_Error( session_id_ ) );
+      END IF;
+      copy_param1_ := Attr_Obj();
+      copy_param2_ := Attr_Obj();
+      copy_param3_ := AttrS_Obj();
+      copy_param1_.Read_From_Session( session_id_, 'COPY_PARAM1');
+      copy_param2_.Read_From_Session( session_id_, 'COPY_PARAM2');
+      copy_param3_.Read_From_Session( session_id_, 'COPY_PARAM3');
+      
+      IF NOT copy_param1_.Equal( param1_ ) THEN
+          fnd_api.Log( '******** 1 ********' );
+          fnd_api.Log( 'copy_param1' );
+          copy_param1_.Log();
+          fnd_api.Log( 'param1' );
+          param1_.Log();
+          Error_Api.Error('TEST', '1 Param is not equal' );
+      END IF;
+      IF NOT copy_param2_.Equal( param2_ ) THEN
+          fnd_api.Log( '******** 2 ********' );
+          copy_param2_.Log();
+          param2_.Log();
+          Error_Api.Error('TEST', '2 Param is not equal' );
+      END IF;
+      IF NOT copy_param3_.Equal( param3_ ) THEN
+          fnd_api.Log( '******** 3 ********' );
+          copy_param3_.Log();
+          param3_.Log();
+          Error_Api.Error('TEST', '3 Param is not equal' );
+      END IF;
+      
+      fnd_Api.Background_Clean( session_id_ );
+      copy_param1_ := fnd_Api.External_Exec( 'echo.exe', attr_ => param1_ );
+      IF NOT copy_param1_.Equal( param1_ ) THEN
+          fnd_api.Log( '******** 4 ********' );
+          fnd_api.Log( 'copy_param1' );
+          copy_param1_.Log();
+          fnd_api.Log( 'param1' );
+          param1_.Log();
+          Error_Api.Error('TEST', '4 Param is not equal' );
+      END IF;
+
+      copy_param1_ := Wcf_Api.Exec( 'ECHO', attr_ => param1_ );
+      IF NOT copy_param1_.Equal( param1_ ) THEN
+          fnd_api.Log( '******** 5 ********' );
+          fnd_api.Log( 'copy_param1' );
+          copy_param1_.Log();
+          fnd_api.Log( 'param1' );
+          param1_.Log();
+          Error_Api.Error('TEST', '5 Param is not equal' );
+      END IF;
+
+      
+  END;
+
+
+  PROCEDURE Test_All IS
+  BEGIN
+      Test_Background_01();
+  END;
+
+end Test_Api;
+/

@@ -1,0 +1,1568 @@
+create or replace package body FND_Api is
+   print_log_         BOOLEAN := FALSE;  
+   print_tab_log_     BOOLEAN := FALSE;  
+
+   curr_lang_         VARCHAR2(10) := 'en';
+   
+   TYPE time_table_type IS TABLE OF TIMESTAMP INDEX BY VARCHAR2(100);
+   time_table_          time_table_type;
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  Split -----------------------------------------------
+  -------------------------------------------------------------------------------------
+
+   FUNCTION Split_    ( text_ IN VARCHAR2, sep_field_  IN VARCHAR2 DEFAULT record_separator_ ) RETURN String_Tab IS
+       list_  List;
+       ret_   String_Tab;
+   BEGIN
+       list_ := Split( text_, sep_field_ );
+       ret_ := String_Tab();
+       ret_.Extend( list_.count );
+       FOR i IN 1..list_.count LOOP
+           ret_(i) := list_(i);
+       END LOOP;
+       RETURN ret_;
+   END;
+
+   FUNCTION Split( text_ IN VARCHAR2, sep_field_ IN VARCHAR2 DEFAULT record_separator_ ) RETURN LIST IS
+       list_     LIST;
+       i_        PLS_INTEGER;
+       start_    PLS_INTEGER; 
+       len_sep_  PLS_INTEGER; 
+       len_      PLS_INTEGER; 
+       num_      PLS_INTEGER;
+   BEGIN
+       len_sep_ := length( sep_field_ );
+       len_ := nvl(length( text_ ),0);
+       start_ := 1;
+       num_   := 0;
+       LOOP
+           EXIT WHEN start_ > len_;
+           i_ := instr( text_, sep_field_, start_ );
+           IF i_ <= 0 THEN
+              i_ := len_+1;
+           END IF;
+           num_ := num_ + 1;
+           list_(num_) := substr(text_, start_, i_ - start_ );
+           start_ := i_ + len_sep_;
+       END LOOP;
+       RETURN list_;
+   END;
+
+   FUNCTION Split_Trim( text_ IN VARCHAR2, sep_field_  IN VARCHAR2 DEFAULT record_separator_ ) RETURN LIST IS
+       tab_      LIST;
+       i_        PLS_INTEGER;
+       start_    PLS_INTEGER; 
+       len_sep_  PLS_INTEGER; 
+       len_      PLS_INTEGER; 
+       num_      PLS_INTEGER;
+   BEGIN
+       len_sep_ := length( sep_field_ );
+       len_ := nvl(length( text_ ),0);
+       start_ := 1;
+       num_ := 0;
+       LOOP
+           EXIT WHEN start_ > len_;
+           i_ := instr( text_, sep_field_, start_ );
+           IF i_ <= 0 THEN
+              i_ := len_+1;
+           END IF;
+           num_ := num_ + 1;
+           tab_(num_) := trim( substr(text_, start_, i_ - start_ ) );
+           start_ := i_ + len_sep_;
+       END LOOP;
+       RETURN tab_;
+   END;
+   
+   FUNCTION Split_Dic( text_ IN VARCHAR2, sep_record_ IN VARCHAR2 DEFAULT record_separator_, sep_field_ IN VARCHAR2 DEFAULT field_separator_ ) RETURN DIC IS
+       tab_      LIST;
+       dic_      DIC;
+       j_        PLS_INTEGER; 
+   BEGIN
+       tab_ := Split( text_, sep_record_ );
+       FOR i_ IN nvl(tab_.first,1)..nvl(tab_.last,-1) LOOP
+          j_ := instr(tab_(i_), sep_field_);
+          IF j_ <= 0 THEN
+             IF tab_(i_) IS NOT NULL THEN
+                 dic_(tab_(i_)) := '';
+             END IF;
+          ELSE
+             dic_( substr(tab_(i_), 1, j_-1) ) := substr(tab_(i_), j_+1 );
+          END IF;
+       END LOOP;
+       RETURN dic_;
+   END;
+   
+   FUNCTION JOIN( list_ IN LIST , sep_ IN VARCHAR2 DEFAULT record_separator_ ) RETURN VARCHAR2 IS
+      str_ VARCHAR2(32600);
+   BEGIN
+       FOR i_ IN nvl(list_.first,1)..nvl(list_.last,-1) LOOP
+           IF i_ = list_.first THEN
+               str_ := list_(i_);
+           ELSE
+               str_ := str_ || sep_ || list_(i_);
+           END IF;
+       END LOOP;
+       RETURN str_;
+   END;
+   
+   FUNCTION JOIN( dic_ IN DIC , sep_record_ IN VARCHAR2 DEFAULT record_separator_, sep_field_ IN VARCHAR2 DEFAULT field_separator_ ) RETURN VARCHAR2 IS
+      str_ VARCHAR2(32600);
+      key_ VARCHAR2(200);
+   BEGIN
+       key_ := dic_.first;
+       WHILE key_ IS NOT NULL LOOP
+           str_ := str_ || key_ || sep_field_ || dic_(key_) || sep_record_;
+           key_ := dic_.next( key_ );
+       END LOOP;
+       RETURN str_;
+   END;
+   
+  -------------------------------------------------------------------------------------
+  ------------------------------  Compile ---------------------------------------------
+  -------------------------------------------------------------------------------------
+
+   PROCEDURE COMPILE( object_name_ IN VARCHAR2 DEFAULT '%' ) IS
+   BEGIN
+       DBMS_OUTPUT.Enable(9000000);
+       FOR obj_ IN (SELECT object_name, object_type 
+                      FROM user_objects
+                     WHERE status = 'INVALID'
+                       AND object_name LIKE object_name_
+                   ) LOOP
+           BEGIN
+               IF obj_.object_type = 'PACKAGE BODY' THEN
+                   EXECUTE IMMEDIATE 'ALTER PACKAGE '||obj_.object_name||' COMPILE BODY';
+               ELSE
+                   EXECUTE IMMEDIATE 'ALTER '||obj_.object_type||' '||obj_.object_name||' COMPILE';
+               END IF;
+               DBMS_output.put_line( 'COMPILE '||obj_.object_type || ' ' || obj_.object_name );
+           EXCEPTION WHEN OTHERS THEN
+               DBMS_output.put_line( 'ERROR   ' || obj_.object_type || ' ' || obj_.object_name );
+               NULL;
+           END;
+       END LOOP;
+   END;
+       
+  -------------------------------------------------------------------------------------
+  ------------------------------  Exist Object ----------------------------------------
+  -------------------------------------------------------------------------------------
+
+   FUNCTION Exist_Object_( object_type_ IN VARCHAR2, object_name_ IN VARCHAR2 ) RETURN BOOLEAN IS
+      tmp_   NUMBER;
+      
+      CURSOR check_( name_ IN VARCHAR2 ) IS
+      SELECT 1 
+        FROM user_objects
+       WHERE object_type = object_type_
+         AND object_name = name_;
+   BEGIN
+       OPEN check_( upper(object_name_) );
+       FETCH check_ INTO tmp_;
+       CLOSE check_;
+       RETURN tmp_ IS NOT NULL;
+   END;
+   
+   FUNCTION Exist_Package  ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN IS
+   BEGIN
+       RETURN Exist_Object_( 'PACKAGE', object_name_ );
+   END;
+   
+   FUNCTION Exist_View     ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN IS
+   BEGIN
+       RETURN Exist_Object_( 'VIEW', object_name_ );
+   END;
+   
+   FUNCTION Exist_Table    ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN IS 
+   BEGIN
+       RETURN Exist_Object_( 'TABLE', object_name_ );
+   END;
+   
+   FUNCTION Exist_Sequence( object_name_ IN VARCHAR2 ) RETURN BOOLEAN IS
+   BEGIN
+       RETURN Exist_Object_( 'SEQUENCE', object_name_ );
+   END;
+   
+   FUNCTION Exist_Object   ( object_name_ IN VARCHAR2 ) RETURN BOOLEAN IS
+      tmp_   NUMBER;
+      
+      CURSOR check_( name_ IN VARCHAR2 ) IS
+      SELECT 1 
+        FROM user_objects
+       WHERE object_name_ = name_;
+   BEGIN
+       OPEN check_( upper(object_name_) );
+       FETCH check_ INTO tmp_;
+       CLOSE check_;
+       RETURN tmp_ IS NOT NULL;
+   END;
+   
+   FUNCTION Exist_Method   ( package_name_ IN VARCHAR2, method_name_ IN VARCHAR2 ) RETURN BOOLEAN IS
+      tmp_   NUMBER;
+      
+      CURSOR check_( package_ IN VARCHAR2, method_ IN VARCHAR2 ) IS
+      SELECT 1 
+        FROM user_procedures
+       WHERE object_name = package_
+         AND procedure_name = method_;
+   BEGIN
+       OPEN check_( upper(package_name_), upper(method_name_) );
+       FETCH check_ INTO tmp_;
+       CLOSE check_;
+       RETURN tmp_ IS NOT NULL;
+   END;   
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  LOG  ------------------------------------------------
+  -------------------------------------------------------------------------------------
+
+  FUNCTION  Log_Is_On RETURN BOOLEAN IS
+  BEGIN
+      RETURN print_log_;
+  END;
+
+  PROCEDURE Log_On( size_ IN NUMBER DEFAULT NULL ) IS
+  BEGIN
+      IF size_ IS NOT NULL THEN
+          DBMS_OUTPUT.Enable(size_);
+      END IF;
+      print_log_ := TRUE;
+  END;
+  
+  PROCEDURE Log_Tab_On IS
+  BEGIN
+      print_log_ := TRUE;
+      print_tab_log_ := TRUE;
+  END;
+    
+  PROCEDURE Log_Off IS
+  BEGIN
+      print_log_ := FALSE;
+      print_tab_log_ := FALSE;
+  END;
+  
+  PROCEDURE Log_To_Tab( log_ IN VARCHAR2 ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+  BEGIN 
+      INSERT INTO FND_LOG_TAB
+      (id, session_id, user_id, log, rowversion)
+      VALUES
+      (FND_LOG_SEQ.nextval, sys_context('USERENV','SID'), USER, log_, SYSDATE);
+      COMMIT;
+  END;
+  
+  PROCEDURE Log( value_ IN VARCHAR2, p1_ IN VARCHAR2 DEFAULT NULL, p2_ IN VARCHAR2 DEFAULT NULL, p3_ IN VARCHAR2 DEFAULT NULL  ) IS
+      text_   VARCHAR2(32767);
+      log_    VARCHAR2(1000);
+      i_      NUMBER;
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      IF (p1_ IS NOT NULL) OR (p2_ IS NOT NULL) OR (p3_ IS NOT NULL) THEN
+          IF instr( value_, ':P1') <= 0 THEN
+              Log( value_ || CASE WHEN p1_ IS NOT NULL THEN ': '||p1_||' ' ELSE '' END
+                          || CASE WHEN p2_ IS NOT NULL THEN ': '||p2_||' ' ELSE '' END
+                          || CASE WHEN p3_ IS NOT NULL THEN ': '||p3_||' ' ELSE '' END );
+              RETURN;
+          END IF;
+          text_ := REPLACE(REPLACE(REPLACE( value_, ':P1', p1_), ':P2', p2_), ':P3', p3_);
+      ELSE 
+          text_ := value_;
+      END IF;
+      WHILE text_ IS NOT NULL LOOP
+          i_ := instr( text_, chr(10) );
+          IF i_ < 1 OR i_ > 250 THEN
+             i_ := 250;
+          END IF;
+          log_ := replace(replace(substr( text_, 1, i_ ), chr(13), ''), chr(10), '');
+          DBMS_output.put_line( log_ );
+          IF print_tab_log_ THEN
+              Log_To_Tab( log_ );
+          END IF;
+          text_ := substr( text_, i_+1 );
+      END LOOP;
+  END;
+  
+  PROCEDURE Log( value_ IN NUMBER ) IS
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      Log( TO_CHAR( VALUE_) );
+  END;
+  
+  PROCEDURE Log( value_ IN DATE ) IS
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      Log( TO_CHAR( VALUE_, date_format_) );
+  END;
+  
+  PROCEDURE Log( value_ IN BOOLEAN ) IS
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      IF value_ THEN
+         Log( 'TRUE' );
+      ELSE
+         Log( 'FALSE' );
+      END IF;
+  END;
+
+  PROCEDURE Log( value_ IN CLOB ) IS     
+     start_  NUMBER;
+     tmp_    VARCHAR2(32767);
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      start_ := 1;
+      LOOP
+          tmp_ := substr(value_, start_, 32000);
+          EXIT WHEN tmp_ IS NULL;
+          Log( tmp_ );
+          start_ := start_ + 32000;
+      END LOOP;
+  END;
+
+  PROCEDURE Log( name_ IN VARCHAR2, value_ IN NUMBER ) IS
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      Log( name_ || ': ' || value_ );
+  END;
+  
+  PROCEDURE Log( name_ IN VARCHAR2, value_ IN DATE ) IS
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      Log( name_ || ': ' || TO_CHAR(value_, date_format_) );
+  END;
+  
+  PROCEDURE Log( name_ IN VARCHAR2, value_ IN BOOLEAN ) IS 
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      IF value_ THEN
+         Log( name_ || ': TRUE' );
+      ELSE
+         Log( name_ || ': FALSE' );
+      END IF;
+  END;
+  
+  PROCEDURE Log_Call_Method( package_ IN VARCHAR2, method_ IN VARCHAR2 ) IS
+  BEGIN 
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      Log( to_char(localtimestamp,'hh24:mi:ss.ff3')|| ' METHOD: '||package_||'.'||method_ );
+  END;
+  
+  PROCEDURE Log_Stack IS
+  BEGIN
+      IF NOT print_log_ THEN
+          RETURN;
+      END IF;
+      Log('--- BEGIN Call Stack ---');
+      Log( '    '||replace(DBMS_UTILITY.FORMAT_CALL_STACK(), chr(10), chr(10)||'    ') );
+      Log('--- END   Call Stack ---');
+  END;
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  Time  -----------------------------------------------
+  -------------------------------------------------------------------------------------
+  
+  PROCEDURE Time_Start( name_ IN VARCHAR2 ) IS
+  BEGIN 
+      IF time_table_.Exists( name_ ) THEN
+          Time_Stop( name_ );
+      END IF;
+      time_table_( name_ ) := localtimestamp;
+  END;
+  
+  PROCEDURE Time_Stop ( name_ IN VARCHAR2 ) IS
+      from_time_ TIMESTAMP;
+      to_time_   TIMESTAMP;
+      diff_      NUMBER;
+  BEGIN 
+      IF time_table_.Exists( name_ ) THEN
+          from_time_ := time_table_( name_ );
+          to_time_   := localtimestamp;
+          diff_ := ((extract(hour from to_time_)-extract(hour from from_time_))*3600+
+                    (extract(minute from to_time_)-extract(minute from from_time_))*60+
+                     extract(second from to_time_)-extract(second from from_time_)) ;            
+          Log( '*** '||rpad(name_,60)||' TIME = '||diff_||' sec.  ***' );
+          time_table_.Delete( name_ );
+      END IF;
+  END;
+      
+
+  -------------------------------------------------------------------------------------
+  ------------------------------  Translate -------------------------------------------
+  -------------------------------------------------------------------------------------
+
+  PROCEDURE Set_Lang( lang_ IN VARCHAR2 ) IS
+  BEGIN
+      curr_lang_ := lang_; 
+  END;
+  
+  FUNCTION Get_Lang RETURN VARCHAR2 IS
+  BEGIN
+      RETURN nvl(curr_lang_,'en');
+  END;
+  
+  FUNCTION Tr( text_id_ IN VARCHAR2,
+               text_    IN VARCHAR2, 
+               p1_      IN VARCHAR2 DEFAULT NULL, 
+               p2_      IN VARCHAR2 DEFAULT NULL, 
+               p3_      IN VARCHAR2 DEFAULT NULL, 
+               lang_    IN VARCHAR2 DEFAULT NULL ) RETURN VARCHAR2 IS
+      tran_text_  VARCHAR2(2000);
+   BEGIN
+      --not implemented yet
+      tran_text_ := text_;  
+      RETURN replace(replace(replace(tran_text_, ':P1', p1_), ':P2', p2_), ':P3', p3_);
+   END;                    
+               
+                  
+  -------------------------------------------------------------------------------------
+  ------------------------------  Util ------------------------------------------------
+  -------------------------------------------------------------------------------------
+
+  FUNCTION Str_To_Date( date_str_ IN VARCHAR2 ) RETURN DATE IS
+  BEGIN
+      IF date_str_ IS NULL THEN
+          RETURN NULL;
+      ELSIF TRIM(date_str_) LIKE '____-__-__' THEN
+          RETURN to_date( date_str_, 'YYYY-MM-DD' );
+      ELSE
+          RETURN to_date( date_str_, date_format_ );
+      END IF;
+  END;
+  
+  FUNCTION Str_To_Number( number_str_ IN VARCHAR2 ) RETURN NUMBER IS
+  BEGIN
+      IF number_str_ IS NULL THEN
+          RETURN NULL;
+      ELSE
+          RETURN To_Number( Translate(number_str_,', ','.'), '99999999999D999999', 'NLS_NUMERIC_CHARACTERS=''.,''');
+      END IF;
+  END;
+  
+  PROCEDURE Set_Session_Info( module_ IN VARCHAR2, action_ IN VARCHAR2, client_info_ IN VARCHAR2 ) IS
+  BEGIN 
+      IF module_ IS NOT NULL OR action_ IS NOT NULL THEN
+          DBMS_APPLICATION_INFO.SET_MODULE( module_name => module_, action_name => action_ );
+      END IF;
+      IF client_info_ IS NOT NULL THEN
+          DBMS_APPLICATION_INFO.SET_CLIENT_INFO( client_info_ );
+      END IF;
+  END;
+
+  FUNCTION Parse_Parameter (
+     value_     IN VARCHAR2,
+     parameter_ IN VARCHAR2 ) RETURN VARCHAR2
+  IS
+     from_       NUMBER;
+     to_         NUMBER;
+     pos_        NUMBER;
+     curr_value_      VARCHAR2(500);
+     from_curr_value_ VARCHAR2(500);
+     to_curr_value_   VARCHAR2(500);
+     parm_list_  VARCHAR2(32000);
+  BEGIN
+     IF (parameter_ IS NULL) THEN
+        RETURN ('TRUE');
+     ELSE
+        parm_list_ := parameter_ || ';';
+     END IF;
+     from_ := 1;
+     to_ := instr(parm_list_, ';', from_);
+     WHILE (to_ > 0) LOOP
+        curr_value_ := ltrim(rtrim(substr(parm_list_, from_, to_ - from_)));
+        pos_ := instr(curr_value_, '..');
+        IF (pos_ > 0) THEN
+  -- Handle between values
+           IF (instr(curr_value_, '%') > 0 OR instr(curr_value_, '_') > 0 ) THEN
+              RETURN ('ERROR');
+           ELSE
+              from_curr_value_ := substr(curr_value_, 1, pos_ - 1);
+              to_curr_value_ := substr(curr_value_, pos_ + 2);
+              IF (from_curr_value_ <= to_curr_value_) THEN
+                 IF (value_ BETWEEN from_curr_value_ AND to_curr_value_) THEN
+                    RETURN ('TRUE');
+                 END IF;
+              ELSE
+                 IF (value_ BETWEEN to_curr_value_ AND from_curr_value_) THEN
+                    RETURN ('TRUE');
+                 END IF;
+              END IF;
+           END IF;
+  -- Handle wildcards
+        ELSIF (instr(curr_value_, '%') > 0 OR instr(curr_value_, '_') > 0 ) THEN
+           IF (instr(curr_value_, '..') > 0) THEN
+              RETURN ('ERROR');
+           ELSE
+              IF (value_ LIKE curr_value_) THEN
+                 RETURN ('TRUE');
+              END IF;
+           END IF;
+        ELSIF (substr(curr_value_, 1, 2) = '<=') THEN
+           IF (value_ <= ltrim(substr(curr_value_,3))) THEN
+              RETURN ('TRUE');
+           END IF;
+        ELSIF (substr(curr_value_, 1, 2) = '>=') THEN
+           IF (value_ >= ltrim(substr(curr_value_,3))) THEN
+              RETURN ('TRUE');
+           END IF;
+        ELSIF (substr(curr_value_, 1, 2) = '!=') THEN
+           IF (value_ <> ltrim(substr(curr_value_,3))) THEN
+              RETURN ('TRUE');
+           END IF;
+        ELSIF (substr(curr_value_, 1, 1) = '<') THEN
+           IF (value_ < ltrim(substr(curr_value_,2))) THEN
+              RETURN ('TRUE');
+           END IF;
+        ELSIF (substr(curr_value_, 1, 1) = '>') THEN
+           IF (value_ > ltrim(substr(curr_value_,2))) THEN
+              RETURN ('TRUE');
+           END IF;
+        ELSE
+           IF (value_ = curr_value_) THEN
+              RETURN ('TRUE');
+           END IF;
+        END IF;
+        from_ := to_ + 1;
+        to_ := instr(parm_list_, ';', from_);
+     END LOOP;
+     RETURN ('FALSE');
+  EXCEPTION
+     WHEN OTHERS THEN
+        RETURN ('ERROR');
+  END Parse_Parameter;
+
+
+  -------------------------------------------------------------------------------------
+  --------------------------   User/Session  ------------------------------------------
+  -------------------------------------------------------------------------------------
+  PROCEDURE Init( env_id_ IN VARCHAR2, user_id_ IN VARCHAR2 DEFAULT NULL ) IS
+  BEGIN
+      Set_Env( env_id_ );
+      --Attr_API.Clear_All_Cache();
+      --SAP_API.Init();
+      IF user_id_ IS NOT NULL THEN
+          Set_User( user_id_ );
+      END IF;
+  END;
+
+  PROCEDURE Clear IS
+  BEGIN
+      Clear_Env();
+      Clear_User();
+      --Sap_Api.Clear();
+  END;
+
+  PROCEDURE Set_Env( env_id_ IN VARCHAR2 ) IS
+  BEGIN
+      environment_id_ := nvl(env_id_,'_');
+  END;
+  
+  PROCEDURE Clear_Env IS
+  BEGIN
+      environment_id_ := '_';
+  END;
+
+  PROCEDURE Set_User   ( user_id_ IN VARCHAR2 ) IS
+  BEGIN
+      IF instr(user_id_,'_') > 0 THEN
+          curr_user_id_ := upper(trim(substr(user_id_,1, instr(user_id_,'_')-1) ));  -- USER_01 =>  USER
+      ELSE
+          curr_user_id_ := upper(trim(user_id_));
+      END IF;
+  END;
+  
+  PROCEDURE Clear_User IS
+  BEGIN
+      curr_user_id_ := '';
+  END;
+
+  PROCEDURE Set_Property( property_type_ IN VARCHAR2, property_id_ IN VARCHAR2, name_ IN VARCHAR2, value_ IN VARCHAR2 ) IS
+  BEGIN
+      IF value_ IS NULL THEN
+          DELETE FND_PROPERTY_TAB
+           WHERE environment_id = environment_id_
+             AND PROPERTY_TYPE = property_type_
+             AND PROPERTY_ID = property_id_
+             AND NAME = name_;
+      ELSE
+          UPDATE FND_PROPERTY_TAB SET
+                 VALUE = value_
+           WHERE environment_id = environment_id_
+             AND PROPERTY_TYPE = property_type_
+             AND PROPERTY_ID = property_id_
+             AND NAME = name_;
+             
+           IF sql%rowcount = 0 THEN
+              INSERT INTO FND_PROPERTY_TAB
+                  (environment_id, PROPERTY_TYPE, PROPERTY_ID, NAME, VALUE, CREATED)
+              VALUES
+                  (environment_id_, property_type_, property_id_, name_, value_, SYSDATE);
+           END IF;
+      END IF;
+  END;
+
+  FUNCTION Get_Property( property_type_ IN VARCHAR2, property_id_ IN VARCHAR2, name_ IN VARCHAR2) RETURN VARCHAR2 IS
+      value_ VARCHAR2(4000);
+      
+      CURSOR get_ IS
+      SELECT VALUE
+        FROM FND_PROPERTY_TAB
+       WHERE environment_id = environment_id_
+         AND PROPERTY_TYPE = property_type_
+         AND PROPERTY_ID = property_id_
+         AND NAME = name_; 
+  BEGIN
+      OPEN get_;
+      FETCH get_ INTO value_;
+      CLOSE get_;
+      RETURN value_;
+  END;
+  
+  PROCEDURE Set_User_Property( name_ IN VARCHAR2, value_ IN VARCHAR2 ) IS
+  BEGIN
+      Set_Property( 'USER', nvl( curr_user_id_, USER ), name_, value_ );
+  END;
+
+  FUNCTION  Get_User_Property( name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+  BEGIN
+      RETURN Get_Property( 'USER', nvl( curr_user_id_, USER ), name_);
+  END;
+
+  PROCEDURE Set_Global_Property( name_ IN VARCHAR2, value_ IN VARCHAR2 ) IS
+  BEGIN
+      Set_Property( 'GLOBAL', '_', name_, value_ );
+  END;
+
+  FUNCTION  Get_Global_Property( name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+  BEGIN
+      RETURN Get_Property( 'GLOBAL', '_', name_);
+  END;
+
+  PROCEDURE Set_Session_Property( session_id_ IN NUMBER, name_ IN VARCHAR2, value_ IN VARCHAR2 ) IS
+  BEGIN
+      Set_Property( 'SESSION', session_id_, name_, value_ );
+  END;
+
+  FUNCTION  Get_Session_Property( session_id_ IN NUMBER, name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+  BEGIN
+      RETURN Get_Property( 'SESSION', session_id_, name_);
+  END;
+  
+  FUNCTION  Get_Property( name_ IN VARCHAR2) RETURN VARCHAR2 IS  -- try find in user_property and then in global_property
+      value_ VARCHAR2(4000);
+      
+      CURSOR get_ IS
+      SELECT VALUE
+        FROM FND_PROPERTY_TAB
+       WHERE environment_id = environment_id_
+         AND (PROPERTY_TYPE, PROPERTY_ID) IN ( ('USER', nvl( curr_user_id_, USER) ),   ( 'GLOBAL', '_') )
+         AND NAME = name_
+       ORDER BY PROPERTY_TYPE DESC; 
+  BEGIN
+      OPEN get_;
+      FETCH get_ INTO value_;
+      CLOSE get_;
+      RETURN value_;
+  END;  
+  
+  FUNCTION Changed_Value( name_ IN VARCHAR2, val1_ IN VARCHAR2, val2_ IN VARCHAR2, val3_ IN VARCHAR2 DEFAULT NULL,
+                          val4_ IN VARCHAR2 DEFAULT NULL, val5_ IN VARCHAR2 DEFAULT NULL ) RETURN NUMBER IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      old_values_ List;
+      ret_num_    NUMBER;
+  BEGIN
+      log( val1_, val2_, val3_);
+      ret_num_ := 1;
+      old_values_ := Split( Get_User_Property('_CV_'||name_), ';' );
+      IF old_values_.count <> 7 OR (val1_ <> old_values_(1) OR
+         (val2_ IS NULL AND val3_ IS NULL AND val4_ IS NULL AND val5_ IS NULL )) THEN
+          Set_User_Property( '_CV_'||name_, 
+              val1_||';0;0;0;0;'||
+              to_char(SYSDATE,'yyyy-mm-dd hh24:mi:ss')||';'||to_char(SYSDATE,'yyyy-mm-dd hh24:mi:ss')  );
+      ELSE 
+          IF (SYSDATE - to_date(old_values_(6),'yyyy-mm-dd hh24:mi:ss'))*24*60*60 <= 2 THEN
+             old_values_(2) := 0;
+             old_values_(3) := 0;
+             old_values_(4) := 0;
+             old_values_(5) := 0;
+          END IF;
+          IF val2_ IS NOT NULL THEN
+              old_values_(2) := old_values_(2) + 1;
+              IF old_values_(2) > 1 THEN
+                  ret_num_ := 2;
+              END IF;
+          END IF;
+          IF val3_ IS NOT NULL THEN
+              old_values_(3) := old_values_(3) + 1;
+              IF old_values_(3) > 1 THEN
+                  ret_num_ := 3;
+              END IF;
+          END IF;
+          IF val4_ IS NOT NULL THEN
+              old_values_(4) := old_values_(4) + 1;
+              IF old_values_(4) > 1 THEN
+                  ret_num_ := 4;
+              END IF;
+          END IF;
+          IF val5_ IS NOT NULL THEN
+              old_values_(5) := old_values_(5) + 1;
+              IF old_values_(5) > 1 THEN
+                  ret_num_ := 5;
+              END IF;
+          END IF;
+          Set_User_Property( '_CV_'||name_, 
+              old_values_(1)||';'||old_values_(2)||';'||old_values_(3)||';'||old_values_(4)||';'||old_values_(5)||';'||
+              old_values_(6)||';'||to_char(SYSDATE,'yyyy-mm-dd hh24:mi:ss') );
+      END IF;
+      log( ret_num_);
+      COMMIT;
+      RETURN ret_num_;
+  END;
+                          
+  
+  PROCEDURE Set_User_Session_Id( value_ IN NUMBER ) IS
+  BEGIN
+      IF value_ IS NULL THEN
+           Set_User_Property( 'SESSION_ID', Random() );
+      ELSE
+           Set_User_Property( 'SESSION_ID', value_ );
+      END IF;
+  END;
+  
+  FUNCTION  Get_User_Session_Id RETURN NUMBER IS
+      session_id_ NUMBER;
+  BEGIN
+      session_id_ := Get_User_Property( 'SESSION_ID' );
+      IF session_id_ IS NULL THEN
+          session_id_ := Random();
+          Set_User_Session_Id( session_id_ );
+      END IF;
+      RETURN session_id_;
+  END;
+  
+  PROCEDURE Check_User_Session_Id( value_ IN NUMBER ) IS
+  BEGIN
+      IF (value_ IS NULL) OR (Get_User_Session_Id() != value_) THEN
+         Error_Api.Error( 'WRONG_SESSION_ID', 'Wrong session id.');
+      END IF;
+  END;
+  
+
+  FUNCTION  Start_Session RETURN NUMBER IS
+      session_id_   NUMBER;
+  BEGIN
+      SELECT FND_SESSION_SEQ.nextval 
+        INTO session_id_
+        FROM dual;
+      RETURN session_id_;
+  END;
+
+  PROCEDURE Stop_Session( session_id_ IN NUMBER ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      state_    VARCHAR2(30);
+  BEGIN
+      state_ := Background_Get_State( session_id_ );
+      IF state_ = 'EXECUTING' THEN
+          Background_Wait_For_Job( session_id_ );
+          state_ := Background_Get_State( session_id_ );
+      END IF;
+      
+      IF state_ IS NULL OR state_ = 'READY' THEN
+          DELETE FND_PROPERTY_TAB
+           WHERE environment_id = environment_id_
+             AND PROPERTY_TYPE = 'SESSION'
+             AND PROPERTY_ID = session_id_;
+
+          DELETE FND_BACKGROUND_JOB_TAB
+           WHERE SESSION_ID = session_id_;
+
+          DELETE FND_SESSION_DATA_TAB
+           WHERE SESSION_ID = session_id_;
+
+          DELETE FND_SESSION_DATA_CLOB_TAB
+           WHERE SESSION_ID = session_id_;
+
+          DELETE FND_SESSION_DATA_BLOB_TAB
+           WHERE SESSION_ID = session_id_;
+      END IF;
+      COMMIT;
+  END;
+
+  FUNCTION  Stop_Session_( session_id_ IN NUMBER ) RETURN NUMBER IS  -- clear session temporary data
+      PRAGMA AUTONOMOUS_TRANSACTION;
+  BEGIN
+      Stop_Session( session_id_ );
+      COMMIT;
+      RETURN session_id_;
+  END;
+
+  PROCEDURE Save_Attr ( attr_ IN Attr_Obj, session_id_ IN NUMBER, name_ IN VARCHAR2 ) IS
+      sattr_ Attr_Obj;
+  BEGIN
+      sattr_ := Attr_Obj();
+      sattr_.Copy_From( attr_ );
+      sattr_.Save_To_Session( session_id_, name_ );
+  END;
+  
+  PROCEDURE Save_AttrS( attr_ IN AttrS_Obj, session_id_ IN NUMBER, name_ IN VARCHAR2 ) IS
+      sattr_ AttrS_Obj;
+  BEGIN
+      sattr_ := AttrS_Obj();
+      sattr_.Copy_From( attr_ );
+      sattr_.Save_To_Session( session_id_, name_ );
+  END;
+
+  FUNCTION Read_Attr  ( session_id_ IN NUMBER, name_ IN VARCHAR2 ) RETURN Attr_Obj IS
+      attr_ Attr_Obj := Attr_Obj();
+  BEGIN
+      attr_.Read_From_Session( session_id_, name_);
+      IF attr_.count_ = 0 THEN
+          RETURN NULL;
+      END IF;
+      RETURN attr_;
+  END;
+  
+  FUNCTION Read_AttrS ( session_id_ IN NUMBER, name_ IN VARCHAR2 ) RETURN AttrS_Obj IS
+      attr_ AttrS_Obj := AttrS_Obj();
+  BEGIN
+      attr_.Read_From_Session( session_id_, name_);
+      IF attr_.count_ = 0 THEN
+          RETURN NULL;
+      END IF;
+      RETURN attr_;
+  END;
+
+  -------------------------------------------------------------------------------------
+  -------------------------   Background Job  -----------------------------------------
+  -------------------------------------------------------------------------------------
+
+  FUNCTION Background_Exec( procedure_name_ IN VARCHAR2,             -- return session_id 
+                            param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                            param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL ) RETURN NUMBER IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      session_id__  NUMBER;
+  BEGIN
+      session_id__ := Start_Session();
+      Background_Exec_( session_id__, procedure_name_,            
+                        param1_, param2_, param3_, param4_, param5_ );
+      COMMIT;
+      RETURN session_id__;
+  END;
+  
+  PROCEDURE Background_Exec_( session_id_ IN NUMBER, procedure_name_ IN VARCHAR2,             -- return session_id 
+                              param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                              param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+  BEGIN
+      
+      INSERT INTO FND_BACKGROUND_JOB_TAB
+         (session_id, state, type, procedure_name, param1, param2, param3, param4, param5, created, keep_data_until)
+      VALUES
+         (session_id_, 'POSTED', 'PL/SQL', replace(replace(procedure_name_, ':session_id', session_id_), ':SESSION_ID', session_id_), 
+          param1_, param2_, param3_, param4_, param5_, SYSDATE, SYSDATE+7);
+         
+      COMMIT;
+      Background_Exec_( session_id_ );
+      COMMIT;
+  END;
+  
+  FUNCTION Get_Dit_Path( dir_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+      path_ VARCHAR2(200);
+  
+      CURSOR get_path( dir_ IN VARCHAR2 ) IS
+      SELECT directory_path
+        FROM ALL_DIRECTORIES d
+       WHERE d.directory_name = dir_;
+  BEGIN
+      OPEN get_path( trim(upper(dir_)) );
+      FETCH get_path INTO path_;
+      CLOSE get_path;
+      IF substr(path_, length(path_) ) NOT IN ('\','/') THEN
+          path_ := path_ ||'\';
+      END IF;
+      RETURN path_;
+  END;
+                           
+  PROCEDURE Background_Exec_( session_id_ IN NUMBER ) IS   -- try execute job in background
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      job_name_         VARCHAR2(35);
+      procedure_name_   VARCHAR2(200);
+      
+  BEGIN
+      IF nvl(Background_Get_State( session_id_ ),'_') NOT IN ('EXECUTING', 'READY') THEN
+          
+          job_name_ := 'SESSION_ID_'||session_id_; 
+          FOR r_ IN (SELECT * FROM FND_BACKGROUND_JOB_TAB 
+                      WHERE session_id = session_id_ ) LOOP
+              IF r_.type = 'EXTERNAL' THEN
+                  procedure_name_ := upper(r_.procedure_name);
+                  IF instr(procedure_name_,'/') = 0 AND instr(procedure_name_,'\') = 0 AND
+                      (procedure_name_ LIKE '%.EXE' OR procedure_name_ LIKE '%.BAT' OR procedure_name_ LIKE '%.CMD') THEN
+                      procedure_name_ := nvl(Get_Dit_Path('FND_BIN'), 'c:\bms\bin\')||r_.procedure_name;
+                  ELSE
+                      procedure_name_ := r_.procedure_name;
+                  END IF;
+                  IF FND_Api.Log_Is_On() THEN
+                      FND_Api.log(  trim(procedure_name_||' '||session_id_||' '||
+                                                         nvl(Get_Dit_Path('BMS'),'c:\bms\files\')||'param_'||session_id_||'.txt'||
+                                                         r_.param1||' '||r_.param2||' '||r_.param3||' '||r_.param4||' '||r_.param5) );
+                  END IF;
+                  
+                  UPDATE FND_BACKGROUND_JOB_TAB SET 
+                      started = localtimestamp
+                  WHERE session_id = session_id_;
+                  COMMIT;
+                  
+                  DBMS_Scheduler.Create_Job
+                       (job_name                 => job_name_,
+                        job_type                 => 'EXECUTABLE',
+                        job_action               => trim(procedure_name_||' '||session_id_||' '||
+                                                         nvl(Get_Dit_Path('BMS'),'c:\bms\files\')||'param_'||session_id_||'.txt'||
+                                                         r_.param1||' '||r_.param2||' '||r_.param3||' '||r_.param4||' '||r_.param5),
+                        number_of_arguments      => 0,
+                        start_date               => sysdate,               
+                        repeat_interval          => null,
+                        end_date                 => null,                                       
+                        job_class                => 'DEFAULT_JOB_CLASS',
+                        enabled                  => false,
+                        auto_drop                => true,
+                        comments                 => NULL );
+              ELSE
+                  DBMS_Scheduler.Create_Job
+                       (job_name                 => job_name_,
+                        job_type                 => 'PLSQL_BLOCK',
+                        job_action               => 'FND_API.Background_Exec_Online( '||session_id_||' );',
+                        number_of_arguments      => 0,
+                        start_date               => sysdate,               
+                        repeat_interval          => null,
+                        end_date                 => null,                                       
+                        job_class                => 'DEFAULT_JOB_CLASS',
+                        enabled                  => false,
+                        auto_drop                => true,
+                        comments                 => NULL );
+              END IF;              
+          END LOOP;
+          DBMS_scheduler.set_attribute(job_name_, 'max_runs',1);   
+          DBMS_SCHEDULER.enable(job_name_);
+      END IF;
+      COMMIT;
+  END;
+
+  FUNCTION External_Exec( command_ IN VARCHAR2,
+                          param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                          param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL,
+                          attr_ IN Attr_Obj DEFAULT NULL ) RETURN Attr_Obj IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      session_id_  NUMBER;
+      param_       Attr_Obj;
+  BEGIN
+      Time_Start( 'External_Exec '||command_ );
+      session_id_ := Start_Session();
+      External_Exec_( session_id_, command_,            
+                        param1_, param2_, param3_, param4_, param5_, attr_ );
+      param_ := Attr_Obj();
+      Background_Wait_For_Job( session_id_ );
+      BEGIN
+          param_.Read_From_File( 'BMS', 'param_'||session_id_||'.txt', 
+               CASE WHEN Background_Get_State( session_id_ ) = 'ERROR' THEN 'N' ELSE 'Y' END );
+          --EXCEPTION WHEN OTHERS THEN
+          --    param_.Add_( 'STATUS', 'ERROR');
+          --    param_.Add_( 'ERROR', SQLERRM);
+      END;
+      Delete_File( 'BMS', 'param_'||session_id_||'_receive.txt');
+      Background_Clean( session_id_ );
+      Time_Stop( 'External_Exec '||command_ );
+      IF FND_Api.Log_Is_On() THEN
+          param_.Log();
+      END IF;
+      COMMIT;      
+      RETURN param_;
+  END;
+  
+  PROCEDURE External_Exec_( session_id_ IN NUMBER, command_ IN VARCHAR2,
+                          param1_ IN VARCHAR2 DEFAULT NULL, param2_ IN VARCHAR2 DEFAULT NULL, param3_ IN VARCHAR2 DEFAULT NULL, 
+                          param4_ IN VARCHAR2 DEFAULT NULL, param5_ IN VARCHAR2 DEFAULT NULL,
+                          attr_ IN Attr_Obj DEFAULT NULL ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      tmp_log_   NUMBER;                        
+  
+      CURSOR get_tmp_log IS
+      SELECT nvl(max(log_id),0)
+       FROM sys.scheduler$_event_log;
+
+  BEGIN
+      OPEN get_tmp_log;
+      FETCH get_tmp_log INTO tmp_log_;
+      CLOSE get_tmp_log;
+  
+      INSERT INTO FND_BACKGROUND_JOB_TAB
+         (session_id, state, type, procedure_name, param1, param2, param3, param4, param5, created, KEEP_DATA_UNTIL, TMP_LOG_ID)
+      VALUES
+         (session_id_, 'POSTED', 'EXTERNAL', replace(replace(command_, ':session_id', session_id_), ':SESSION_ID', session_id_), 
+          param1_, param2_, param3_, param4_, param5_, SYSDATE, SYSDATE+7, tmp_log_);
+      IF attr_ IS NOT NULL THEN
+          DECLARE
+              attr2_ Attr_Obj;
+          BEGIN
+              attr2_ := Attr_Obj();
+              attr2_.Copy_From( attr_ );
+              attr2_.Save_To_File( 'BMS', 'param_'||session_id_||'.txt' );
+          END;
+      END IF;
+
+      COMMIT;
+      Background_Exec_( session_id_ );
+      COMMIT;
+  END;
+    
+  FUNCTION  Generate_Pdf( doc_name_ IN VARCHAR2, bookmarks_ IN Attr_Obj ) RETURN BLOB IS
+      attr_    Attr_Obj;
+      param_   Attr_Obj;
+  BEGIN
+      attr_ := Attr_Obj();
+      param_ := Attr_Obj();
+      param_.Add_('FILE_NAME', Get_Dit_Path('FND_DOC')||doc_name_ );
+      param_.Add_('OUTPUT', 'PDF' );
+      attr_.Add_( 'ATTR', param_);
+      param_ :=  Attr_Obj();
+      param_.Copy_From( bookmarks_ );
+      attr_.Add_( 'BOOKMARKS', param_);
+      RETURN External_Exec( 'GeneratePdf.exe', attr_ => attr_ ).GetBlob('PDF');
+  END;
+
+  FUNCTION  Generate_Pdf_( doc_name_ IN VARCHAR2, filename_ IN VARCHAR2, bookmarks_ IN Attr_Obj ) RETURN NUMBER IS
+      pdf_        BLOB;
+      session_id_ NUMBER;
+  BEGIN
+      pdf_ := FND_API.Generate_Pdf( doc_name_, bookmarks_ );
+    
+      session_id_ := FND_Api.Start_Session();
+    
+      INSERT INTO FND_SESSION_DATA_BLOB_TAB
+         (SESSION_ID, DATA_TYPE, ROW_NO, BLOB_DATA )
+      VALUES
+         (session_id_, 'PDF', 1, pdf_);
+
+      INSERT INTO FND_SESSION_DATA_TAB
+         (SESSION_ID, DATA_TYPE, ROW_NO, s01 )
+      VALUES
+         (session_id_, 'PDF', 1, filename_);
+         
+      RETURN session_id_;
+  END;
+  
+  PROCEDURE Background_Exec_Online ( session_id_ IN NUMBER, force_exec_ IN BOOLEAN DEFAULT FALSE ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      
+      error_text_   VARCHAR2(2000);
+      num_params_   NUMBER;
+      rec_  FND_BACKGROUND_JOB_TAB%ROWTYPE;
+      CURSOR get_ IS
+      SELECT *
+        FROM FND_BACKGROUND_JOB_TAB
+       WHERE session_id = session_id_
+       FOR UPDATE; 
+  BEGIN
+      OPEN get_;
+      FETCH get_ INTO rec_;
+      CLOSE get_;
+      IF NOT force_exec_ AND rec_.state = 'EXECUTING' THEN
+          COMMIT;
+          RETURN;
+      END IF;
+      IF rec_.type = 'EXTERNAL' THEN
+          COMMIT;
+          RETURN;
+      END IF;
+
+      UPDATE FND_BACKGROUND_JOB_TAB SET 
+          state = 'EXECUTING',
+          STARTED = localtimestamp,
+          EXECUTED = NULL,
+          error_text = ''
+      WHERE session_id = session_id_;
+      COMMIT;
+      
+      SAVEPOINT job_start;
+      num_params_ := length( replace(rec_.PROCEDURE_NAME,':=','=') ) - length(replace(replace(rec_.PROCEDURE_NAME,':=','='),':') );
+      IF num_params_ = 0 THEN
+          EXECUTE IMMEDIATE rec_.PROCEDURE_NAME;
+      ELSIF num_params_ = 1 THEN
+          EXECUTE IMMEDIATE rec_.PROCEDURE_NAME USING rec_.param1;
+      ELSIF num_params_ = 2 THEN
+          EXECUTE IMMEDIATE rec_.PROCEDURE_NAME USING rec_.param1, rec_.param2;
+      ELSIF num_params_ = 3 THEN
+          EXECUTE IMMEDIATE rec_.PROCEDURE_NAME USING rec_.param1, rec_.param2, rec_.param3;
+      ELSIF num_params_ = 4 THEN
+          EXECUTE IMMEDIATE rec_.PROCEDURE_NAME USING rec_.param1, rec_.param2, rec_.param3, rec_.param4;
+      ELSE
+          EXECUTE IMMEDIATE rec_.PROCEDURE_NAME USING rec_.param1, rec_.param2, rec_.param3, rec_.param4, rec_.param5;
+      END IF;
+
+      UPDATE FND_BACKGROUND_JOB_TAB SET 
+          state = 'READY',
+          EXECUTED = localtimestamp,
+          error_text = ''
+      WHERE session_id = session_id_;
+      COMMIT;
+      
+      EXCEPTION WHEN OTHERS THEN
+         error_text_ := substr(SQLERRM, 1, 2000);
+         ROLLBACK TO job_start;
+         
+         UPDATE FND_BACKGROUND_JOB_TAB SET 
+             state = 'ERROR',
+             error_text = error_text_
+         WHERE session_id = session_id_;
+         COMMIT;      
+  END;
+  
+  PROCEDURE Background_Run( session_id_ IN NUMBER ) IS
+      PRAGMA AUTONOMOUS_TRANSACTION;
+      job_name_   VARCHAR2(50);
+      state_      VARCHAR2(20);
+      type_       VARCHAR2(20);
+      
+      CURSOR get_state_ IS
+      SELECT state, TYPE
+        FROM FND_BACKGROUND_JOB_TAB
+       WHERE session_id = session_id_
+       FOR UPDATE;
+  BEGIN
+      OPEN get_state_;
+      FETCH get_state_ INTO state_, type_;
+      CLOSE get_state_;
+      IF state_ IN ('POSTED','ERROR') THEN
+          BEGIN
+              job_name_ := 'SESSION_ID_'||session_id_;
+              DBMS_SCHEDULER.disable(job_name_);
+
+              IF type_ = 'EXTERNAL' THEN
+                  UPDATE FND_BACKGROUND_JOB_TAB SET 
+                     state = 'EXECUTING',
+                     STARTED = localtimestamp,
+                     EXECUTED = NULL,
+                     error_text = ''
+                  WHERE session_id = session_id_;              
+                  COMMIT; 
+                  DBMS_SCHEDULER.run_job(job_name_);
+                  DBMS_SCHEDULER.drop_job(job_name_);
+              ELSE
+                  DBMS_SCHEDULER.drop_job(job_name_);
+                  UPDATE FND_BACKGROUND_JOB_TAB SET 
+                     state = 'EXECUTING',
+                     STARTED = localtimestamp,
+                     EXECUTED = NULL,
+                     error_text = ''
+                  WHERE session_id = session_id_;              
+                  COMMIT; 
+                  Background_Exec_Online( session_id_, TRUE );
+              END IF;
+          EXCEPTION WHEN OTHERS THEN
+                 NULL;
+          END;
+          
+      END IF;
+      COMMIT;
+  END;
+  
+  PROCEDURE Background_Wait_For_Job( session_id_ IN NUMBER, throw_error_ IN VARCHAR2 DEFAULT 'N' ) IS
+      state_          VARCHAR2(30);
+      started_        TIMESTAMP;
+      date_end_       TIMESTAMP;
+      diff_           NUMBER;
+
+      CURSOR get_ IS
+      SELECT started, executed
+        FROM FND_BACKGROUND_JOB_TAB
+       WHERE session_id = session_id_; 
+  BEGIN
+      state_ := Background_Get_State( session_id_ );
+      IF state_ = 'POSTED' THEN
+          Background_Run( session_id_ );
+          state_ := Background_Get_State( session_id_ );
+      END IF;
+      WHILE state_ NOT IN ('ERROR', 'READY') LOOP
+          FOR r_ IN (SELECT session_id 
+                       FROM FND_BACKGROUND_JOB_TAB
+                      WHERE state = 'EXECUTING' 
+                        AND TYPE = 'EXTERNAL'
+                        AND session_id <> session_id_ ) LOOP
+              state_ := Background_Get_State( r_.session_id );
+          END LOOP;
+          state_ := Background_Get_State( session_id_ );
+          IF state_ NOT IN ('ERROR', 'READY') THEN
+              Background_Clean_Unused();
+              state_ := Background_Get_State( session_id_ );
+          ELSE 
+              EXIT;
+          END IF;
+          /*
+          IF state_ NOT IN ('ERROR', 'READY') THEN
+              DBMS_lock.sleep( 1 );
+              state_ := Background_Get_State( session_id_ );
+          ELSE 
+              EXIT;
+          END IF;
+          */
+      END LOOP;
+      IF FND_Api.Log_Is_On() THEN
+          OPEN get_;
+          FETCH get_ INTO started_, date_end_;
+          CLOSE get_;
+          diff_ := ((extract(hour from date_end_)-extract(hour from started_))*3600+
+                    (extract(minute from date_end_)-extract(minute from started_))*60+
+                     extract(second from date_end_)-extract(second from started_)) ;            
+          Log('Session: '||session_id_||' '||state_||' '||diff_||'s');
+      END IF;
+      IF throw_error_ = 'Y' AND state_ = 'ERROR' THEN
+          DECLARE
+              error_text_ VARCHAR2(2000);
+          BEGIN
+              SELECT error_text
+                INTO error_text_
+                FROM FND_BACKGROUND_JOB_TAB
+               WHERE session_id = session_id_;
+              Error_Api.Error( 'ERROR_IN_BACKGROUND', 'Error in background job: :P1', error_text_ );
+          END;
+      END IF;
+  END;
+
+
+  FUNCTION Background_Get_State( session_id_ IN NUMBER ) RETURN VARCHAR2 IS      -- NONE / POSTED / EXECUTING / READY / ERROR
+      PRAGMA AUTONOMOUS_TRANSACTION;
+
+      state_          FND_BACKGROUND_JOB_TAB.STATE%TYPE;
+      type_           FND_BACKGROUND_JOB_TAB.TYPE%TYPE;  
+      procedure_name_ FND_BACKGROUND_JOB_TAB.procedure_name%TYPE;
+      started_        TIMESTAMP;
+      date_end_       TIMESTAMP;
+      diff_           NUMBER;
+      tmp_log_id_     NUMBER;
+      tmp_            NUMBER;
+
+      CURSOR get_ IS
+      SELECT state, TYPE, procedure_name, started, executed, tmp_log_id
+        FROM FND_BACKGROUND_JOB_TAB
+       WHERE session_id = session_id_; 
+       
+      CURSOR get_detail_( job_name_ IN VARCHAR2, tmp_log_id_ IN NUMBER ) IS
+      SELECT status, error, actual_start_date
+      FROM (  SELECT status, additional_info error, actual_start_date
+                FROM user_scheduler_job_run_details
+               WHERE job_name = job_name_
+                 AND log_id > tmp_log_id_
+               ORDER BY log_id DESC
+            )
+      UNION ALL
+      SELECT 'EXECUTING', '', localtimestamp
+        FROM dba_scheduler_running_jobs
+       WHERE job_name = job_name_;
+  BEGIN
+      OPEN get_;
+      FETCH get_ INTO state_, type_, procedure_name_, started_, date_end_, tmp_log_id_;
+      CLOSE get_;
+      IF type_ = 'EXTERNAL' AND state_ IN ('EXECUTING','POSTED') THEN
+          DECLARE
+              status_         VARCHAR2(50);
+              error_text_     VARCHAR2(2000);
+          BEGIN          
+              OPEN get_detail_( 'SESSION_ID_'|| session_id_, nvl(tmp_log_id_,0) );
+              FETCH get_detail_ INTO status_, error_text_, date_end_;
+              CLOSE get_detail_;
+
+              IF status_ IS NULL THEN
+                  IF File_Exists( 'BMS', 'param_'||session_id_||'_receive.txt') THEN
+                      status_ := 'SUCCEEDED';
+                      error_text_ := NULL;
+                      date_end_ := localtimestamp;
+                  END IF;
+              END IF;
+             
+              IF status_ IS NULL THEN
+                  NULL;
+              ELSIF status_ = 'EXECUTING' THEN
+                  IF state_ = 'POSTED' THEN
+                      UPDATE FND_BACKGROUND_JOB_TAB SET 
+                          state = 'EXECUTING'
+                      WHERE session_id = session_id_;
+                      state_ := 'EXECUTING';
+                  END IF;
+              ELSIF status_ = 'SUCCEEDED' THEN
+                  /*
+                  diff_ := ((extract(hour from date_end_)-extract(hour from started_))*3600+
+                            (extract(minute from date_end_)-extract(minute from started_))*60+
+                             extract(second from date_end_)-extract(second from started_)) ;            
+                  Log('External: '||procedure_name_||' '||status_||' '||diff_||'s');
+                  */
+                  UPDATE FND_BACKGROUND_JOB_TAB SET 
+                      state = 'READY',
+                      EXECUTED = date_end_,
+                      error_text = ''
+                  WHERE session_id = session_id_;
+              ELSE
+                  diff_ := ((extract(hour from date_end_)-extract(hour from started_))*3600+
+                            (extract(minute from date_end_)-extract(minute from started_))*60+
+                             extract(second from date_end_)-extract(second from started_)) ;            
+                  Log('External: '||procedure_name_||' '||status_||' '||diff_||'s');
+                  Log(error_text_);
+                  UPDATE FND_BACKGROUND_JOB_TAB SET 
+                      state = 'ERROR',
+                      error_text = error_text_
+                  WHERE session_id = session_id_;
+              END IF;
+          END;
+      END IF;
+      COMMIT;
+      RETURN Nvl(state_, 'NONE');
+  END;
+  
+  FUNCTION  Background_Get_Error( session_id_ IN NUMBER ) RETURN VARCHAR2 IS
+      error_  FND_BACKGROUND_JOB_TAB.ERROR_TEXT%TYPE;
+      CURSOR get_ IS
+      SELECT error_text
+        FROM FND_BACKGROUND_JOB_TAB
+       WHERE session_id = session_id_
+         AND state = 'ERROR'; 
+  BEGIN
+      OPEN get_;
+      FETCH get_ INTO error_;
+      CLOSE get_;
+      RETURN error_;
+  END;
+  
+  PROCEDURE Background_Clean ( session_id_ IN NUMBER ) IS
+  BEGIN
+      Stop_Session( session_id_ );
+  END;
+  
+  
+  PROCEDURE Background_Clean_Unused IS  -- after 7 days executed job will be deleted 
+  BEGIN
+      FOR r_ IN (SELECT session_id 
+                   FROM FND_BACKGROUND_JOB_TAB
+                  WHERE state = 'READY' 
+                    AND KEEP_DATA_UNTIL < SYSDATE ) LOOP
+          Stop_Session( r_.session_id );          
+      END LOOP;
+  END;
+
+  FUNCTION  Random( max_num_ NUMBER DEFAULT NULL ) RETURN NUMBER IS
+  BEGIN
+     IF max_num_ IS NULL THEN
+         RETURN DBMS_random.Random();
+     ELSE
+         RETURN trim(DBMS_random.Value(0, max_num_));
+     END IF;
+  END;
+
+  FUNCTION Attr_Obj_  RETURN Attr_Obj IS
+  BEGIN
+      RETURN Attr_Obj();
+  END;
+  
+  FUNCTION AttrS_Obj_ RETURN AttrS_Obj IS
+  BEGIN
+      RETURN AttrS_Obj();
+  END;
+
+  FUNCTION Attr_Tab_  RETURN Attr_Tab IS
+  BEGIN
+      RETURN Attr_Tab();
+  END;
+
+  FUNCTION Attr_Record( xml_ IN OUT NOCOPY Xml_Obj, path_ IN VARCHAR2 ) RETURN Attr_Obj IS
+  BEGIN
+      RETURN xml_.Attr_Record( path_ );
+  END;
+
+  FUNCTION Attr_Get( attr_ IN Attr_Obj, name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+  BEGIN
+      RETURN attr_.Get( name_ );
+  END;
+
+  PROCEDURE Attr_Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN VARCHAR2 ) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+  
+  PROCEDURE Attr_Add( attr_ IN OUT NOCOPY Attr_Obj, name_ IN VARCHAR2, value_ IN OUT NOCOPY Attr_Obj ) IS
+  BEGIN
+      attr_.Add_( name_, value_ );
+  END;
+
+  PROCEDURE Tab_Add_Obj( tab_ IN OUT NOCOPY Attr_Tab, attr_ IN OUT NOCOPY Attr_Obj) IS
+  BEGIN
+      tab_.Extend( 1 );
+      tab_(tab_.count) := attr_;
+  END;
+
+  PROCEDURE Write_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2, data_ IN VARCHAR2) IS
+      output_   utl_file.file_type;
+  BEGIN
+      output_ := utl_file.fopen(dir_, file_name_, 'w', 32767);
+      utl_file.put(output_, data_);
+      utl_file.fclose(output_);
+  END;
+  
+  PROCEDURE Write_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2, data_ IN CLOB ) IS
+      tmp_      VARCHAR2(32767);
+      output_   utl_file.file_type;
+      len_      PLS_INTEGER;
+      start_    PLS_INTEGER;
+      buf_len_  NUMBER;
+  BEGIN
+      output_ := utl_file.fopen(dir_, file_name_, 'wb', 32767);
+
+      len_ := DBMS_lob.getlength(data_);
+      IF len_ < 32767 THEN
+          utl_file.put_raw(output_, utl_raw.cast_to_raw(data_));
+      ELSE
+          start_ := 1;
+          WHILE start_ <= len_ LOOP
+              buf_len_ := least(32760, len_ - start_ +1);
+              DBMS_lob.read(data_, buf_len_, start_, tmp_);
+              utl_file.put_raw(output_, utl_raw.cast_to_raw(tmp_));
+              start_ := start_ + 32760;
+          END LOOP;
+      END IF;
+      utl_file.fclose(output_);
+  END;
+
+  PROCEDURE Write_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2, data_ IN BLOB ) IS
+      tmp_      RAW(32767);
+      output_   utl_file.file_type;
+      len_      PLS_INTEGER;
+      start_    PLS_INTEGER;
+      buf_len_  NUMBER;
+  BEGIN
+      output_ := utl_file.fopen(dir_, file_name_, 'wb', 32767);
+
+      len_ := DBMS_lob.getlength(data_);
+      IF len_ < 3276 THEN
+          utl_file.put_raw(output_, data_);
+      ELSE
+          start_ := 1;
+          WHILE start_ <= len_ LOOP
+              buf_len_ := least(32760, len_ - start_ +1);
+              DBMS_lob.read(data_, buf_len_, start_, tmp_);
+              utl_file.put_raw(output_, tmp_);
+              --utl_file.fflush(output_); 
+              start_ := start_ + 32760;
+          END LOOP;
+      END IF;
+      utl_file.fclose(output_);
+  END;
+
+
+  FUNCTION  Read_File ( dir_ IN VARCHAR2, file_name_ IN VARCHAR2 ) RETURN VARCHAR2 IS
+  BEGIN
+      RETURN substr( Read_CFile( file_name_, dir_ ), 1, 32767 );
+  END;
+
+  FUNCTION  Read_CFile( dir_ IN VARCHAR2, file_name_ IN VARCHAR2 ) RETURN CLOB IS
+      clob_  CLOB;
+      ret_   CLOB;
+      bfile_ BFILE;
+      
+      dest_offset_  INTEGER := 1;
+      src_offset_   INTEGER := 1;
+      --src_csid_     NUMBER  := NLS_CHARSET_ID('EE8MSWIN1250');
+      src_csid_     NUMBER  := NLS_CHARSET_ID('AL32UTF8');
+      lang_context_ INTEGER := DBMS_lob.default_lang_ctx;
+      warning_      INTEGER;      
+  BEGIN
+      DBMS_lob.createtemporary( clob_, true );
+      bfile_ := BFILENAME(dir_, file_name_);
+      IF nvl(DBMS_lob.getlength(bfile_),0) = 0 THEN
+          RETURN empty_clob();
+      ELSE
+          DBMS_lob.fileopen(bfile_);
+          DBMS_lob.loadclobfromfile(clob_, bfile_, DBMS_lob.getlength(bfile_), 
+               dest_offset_, src_offset_, src_csid_, lang_context_, warning_);
+          DBMS_lob.fileclose(bfile_);
+          ret_ := clob_;
+          DBMS_LOB.freetemporary(clob_);
+          RETURN ret_;
+      END IF;
+      EXCEPTION WHEN OTHERS THEN
+          DBMS_LOB.freetemporary(clob_);
+          RAISE;
+  END;
+
+  FUNCTION  Read_BFile( dir_ IN VARCHAR2, file_name_ IN VARCHAR2 ) RETURN BLOB IS
+      blob_  BLOB;
+      ret_   BLOB;
+      bfile_ BFILE;
+  BEGIN
+      DBMS_lob.createtemporary( blob_, true );  
+      bfile_ := BFILENAME(dir_, file_name_);
+      IF nvl(DBMS_lob.getlength(bfile_),0) = 0 THEN
+          RETURN empty_blob();
+      ELSE
+          DBMS_lob.fileopen(bfile_);
+          DBMS_lob.loadfromfile(blob_, bfile_, DBMS_lob.getlength(bfile_) );
+          DBMS_lob.fileclose(bfile_);
+          ret_ := blob_;
+          DBMS_LOB.freetemporary(blob_);
+          RETURN ret_;
+      END IF;
+      EXCEPTION WHEN OTHERS THEN
+          DBMS_LOB.freetemporary(blob_);
+          RAISE;
+  END;
+
+  FUNCTION  File_Exists( dir_ IN VARCHAR2, file_name_ IN VARCHAR2) RETURN BOOLEAN IS
+      bfile_ BFILE;
+  BEGIN
+      bfile_ := BFILENAME(dir_, file_name_);
+      RETURN DBMS_lob.fileexists(bfile_) = 1;
+  END;
+
+  PROCEDURE Delete_File( dir_ IN VARCHAR2, file_name_ IN VARCHAR2 ) IS
+  BEGIN
+      utl_file.fremove( dir_, file_name_);
+      EXCEPTION WHEN OTHERS THEN
+          NULL;
+  END;
+
+  FUNCTION  File_List  ( dir_ IN VARCHAR2, file_mask_ IN VARCHAR2 DEFAULT '%' ) RETURN String_tab IS
+      list_             String_Tab;
+      directory_path_   VARCHAR2(100);
+  BEGIN
+  /*
+       directory_path_ := nvl(Get_Dit_Path(dir_), dir_ );
+  
+      IF file_mask_ = '%' THEN
+          RETURN Split_( Dir_List(directory_path_, ';'), ';' );
+      ELSE
+          SELECT *
+            BULK COLLECT INTO list_
+            FROM TABLE( FND_API.Split_( Dir_List(directory_path_, ';'), ';' ) )
+           WHERE upper(column_value) LIKE upper(file_mask_) ;
+           RETURN list_;
+      END IF;
+      */
+      NULL;
+  END;
+
+
+    
+end FND_Api;
+/

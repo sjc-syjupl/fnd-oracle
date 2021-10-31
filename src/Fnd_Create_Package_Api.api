@@ -1,0 +1,30 @@
+create or replace package FND_CREATE_PACKAGE_API AUTHID CURRENT_USER is
+
+  PROCEDURE Create_View    ( table_name_ IN VARCHAR2 );
+  PROCEDURE Create_Sequence( table_name_ IN VARCHAR2 );
+  PROCEDURE Create_APT     ( table_name_ IN VARCHAR2 );
+  PROCEDURE Create_API     ( table_name_ IN VARCHAR2 );
+
+  PROCEDURE Create_All     ( table_name_ IN VARCHAR2 );
+
+  PROCEDURE ReCreateNew;
+  PROCEDURE ReCreateAll;
+
+  FUNCTION Text_API     ( table_name_ IN VARCHAR2 ) RETURN VARCHAR2;
+  FUNCTION Text_API_Body( table_name_ IN VARCHAR2 ) RETURN VARCHAR2;
+  FUNCTION Text_APT     ( table_name_ IN VARCHAR2 ) RETURN CLOB;
+  FUNCTION Text_APT_Body( table_name_ IN VARCHAR2 ) RETURN CLOB;
+  FUNCTION Text_Sequence( table_name_ IN VARCHAR2 ) RETURN VARCHAR2;
+  FUNCTION Text_View    ( table_name_ IN VARCHAR2 ) RETURN VARCHAR2;
+
+
+  PROCEDURE SetUser( user_id_ IN VARCHAR2 );
+
+  /*
+  DECLARE
+  BEGIN
+      FND_CREATE_PACKAGE_API.ReCreateAll();
+  END;
+  */
+end FND_CREATE_PACKAGE_API;
+/
