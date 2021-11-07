@@ -34,9 +34,24 @@ When the packages are generated then you can modify data like in a below way..
 DECLARE
     rec_ PERSONS_APT.REC;
 BEGIN
-    rec_ := PERSONS_APT.Get_Rec( insurance_id* => 'id' );
+    rec_ := PERSONS_APT.Get_Rec( insurance_id_ => 'id' );
     rec_.ADDRESS := :ADDRESS;
     rec_.CITY := :CITY;
     PERSONS_APT.Modify( rec_ );
+END;
+```
+
+In a similar way you can insert a new row and remove existing.
+
+```
+DECLARE
+    rec_ PERSONS_APT.REC;
+BEGIN
+    rec_.INSURANCE_ID_ := '123456';
+    rec_.ADDRESS := :ADDRESS;
+    rec_.CITY := :CITY;
+    PERSONS_APT.New( rec_ );
+
+    PERSONS_APT.Remove( insurance_id_ => 'old_id' );
 END;
 ```
