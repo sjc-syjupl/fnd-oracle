@@ -239,73 +239,6 @@ BEGIN
 END;
 /
 
-/*
-DECLARE
-BEGIN
-   EXECUTE IMMEDIATE '
-   CREATE TABLE sap_rfc_cache_tab (
-      time          DATE,
-      hash          NUMBER,
-      status        VARCHAR2(20),
-      response      CLOB
-   ) nologging';
-
-   EXECUTE IMMEDIATE 'CREATE INDEX sap_rfc_cache_ix1 ON sap_rfc_cache_tab (hash)';
-   EXCEPTION WHEN OTHERS THEN
-      NULL;
-END;
-/
-
-
-DECLARE
-BEGIN
-   EXECUTE IMMEDIATE '
-   CREATE TABLE sap_cache_head_tab (
-      cache_id           NUMBER         NOT NULL,
-      cache_type         VARCHAR2(20)   NOT NULL,
-      table_name         VARCHAR2(30)   NOT NULL,
-      table_description  VARCHAR2(100),
-      table_columns      VARCHAR2(4000) NOT NULL,
-      table_columns_tab  name_tab,
-      table_columns_count  NUMBER,
-      table_columns_key  VARCHAR2(1000),
-      where_str          VARCHAR2(1000),
-      last_update        DATE,
-      valid_to           DATE,
-      next_update_sec    NUMBER      DEFAULT 10,
-      auto_refresh       VARCHAR2(1) DEFAULT ''N'',  --Y/N
-      time_execute_sec   NUMBER,
-      count_rows         NUMBER,
-      state              VARCHAR2(20)  --READY / NEW / EXECUTED 
-   ) nested table table_columns_tab store as sap_cache_head_col_tab nologging';
-
-   EXECUTE IMMEDIATE 'CREATE UNIQUE INDEX sap_cache_head_ix1 ON sap_cache_head_tab (cache_id)';
-   EXECUTE IMMEDIATE 'CREATE INDEX sap_cache_head_ix2 ON sap_cache_head_tab (table_name)';
-   EXCEPTION WHEN OTHERS THEN
-      NULL;
-END;
-/
-
-
-DECLARE
-BEGIN
-   EXECUTE IMMEDIATE '
-   CREATE TABLE sap_cache_items_tab (
-      cache_id           NUMBER NOT NULL,
-      row_no             NUMBER NOT NULL,
-      key                VARCHAR2(70),
-      row_values         string_tab,
-      valid_to           DATE
-   ) nested table row_values store as sap_cache_items_val_tab nologging';
-
-   EXECUTE IMMEDIATE 'CREATE INDEX sap_cache_items_ix1 ON sap_cache_items_tab (cache_id, row_no)';
-   EXECUTE IMMEDIATE 'CREATE INDEX sap_cache_items_ix2 ON sap_cache_items_tab (cache_id, key)';
-   EXCEPTION WHEN OTHERS THEN
-      NULL;
-END;
-/
-
-*/
 
 
 
@@ -397,31 +330,6 @@ END;
 /
 
 
-prompt Compile type Attr_Obj
-@@Attr_Obj.tapi
-prompt Compile type AttrS_Obj
-@@AttrS_Obj.tapi
-
-DECLARE
-BEGIN
-   BEGIN 
-   EXECUTE IMMEDIATE 'CREATE OR REPLACE TYPE Attr_Tab AS TABLE OF Attr_Obj';
-   EXCEPTION WHEN OTHERS THEN
-      NULL;
-   END;
-
-   BEGIN 
-   EXECUTE IMMEDIATE 'CREATE OR REPLACE TYPE AttrS_Tab AS TABLE OF AttrS_Obj';
-   EXCEPTION WHEN OTHERS THEN
-      NULL;
-   END;
-END;
-/
-
-prompt Compile type XML_Obj
-@@XML_Obj.tapi
-prompt Compile package Attr_API
-@@Attr_API.api
 prompt Compile package FND_API
 @@FND_API.api
 prompt Compile package FND_CREATE_PACKAGE_API
@@ -429,20 +337,9 @@ prompt Compile package FND_CREATE_PACKAGE_API
 prompt Compile package Error_Api
 @@Error_Api.api
 prompt Compile package SAP_API
---@@SAP_API.api
-prompt Compile package Test_API
-@@Test_API.api
 
 
 
-prompt Compile type body Attr_Obj
-@@Attr_Obj.tapy
-prompt Compile type body AttrS_Obj
-@@AttrS_Obj.tapy
-prompt Compile type body XML_Obj
-@@XML_Obj.tapy
-prompt Compile package body Attr_API
-@@Attr_API.apy
 prompt Compile package body FND_API
 @@FND_API.apy
 prompt Compile package body FND_CREATE_PACKAGE_API
@@ -450,9 +347,6 @@ prompt Compile package body FND_CREATE_PACKAGE_API
 prompt Compile package body Error_Api
 @@Error_Api.apy
 prompt Compile package body SAP_API
---@@SAP_API.apy
-prompt Compile package body Test_API
-@@Test_API.apy
 
 ALTER PACKAGE FND_API COMPILE;
 
@@ -462,29 +356,6 @@ BEGIN
 END;
 /
 
-/*
-DECLARE
-    count_ NUMBER;
-BEGIN
-    SELECT COUNT(*) 
-      INTO count_
-      FROM user_scheduler_jobs
-     WHERE job_name = 'SAP_REFRESH_CACHE';
- 
-    IF count_ = 0 THEN
-        DBMS_SCHEDULER.CREATE_JOB (
-           job_name             => 'SAP_REFRESH_CACHE',
-           job_type             => 'PLSQL_BLOCK',
-           job_action           => 'BEGIN SAP_API.Refresh_Cache_At_Night(); END;',
-           start_date           => TRUNC(SYSDATE)+1+5/24,
-           repeat_interval      => 'FREQ=DAILY', 
-           enabled              =>  TRUE,
-           comments             => 'Refresh SAP cache');
-    END IF;
-    DBMS_SCHEDULER.Run_JOB ( job_name => 'SAP_REFRESH_CACHE' );
-END;
-/
-*/
 
 exit;
 /

@@ -1,0 +1,559 @@
+CREATE OR REPLACE PACKAGE BODY PERSONS_APT IS
+
+  PROCEDURE Log( rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL );
+  PROCEDURE Log_Diff( old_rec_ IN OUT NOCOPY REC, new_rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL);
+
+  --------------------------------------------------------------------------------------------------------------
+  ---------------------------------------------   EXIST   ------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION  Exist     ( INSURANCE_ID_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN BOOLEAN IS
+     value_ NUMBER;
+
+     CURSOR get_ IS
+     SELECT 1
+       FROM PERSONS_TAB
+      WHERE INSURANCE_ID = INSURANCE_ID_;
+  BEGIN
+     OPEN get_;
+     FETCH get_ INTO value_;
+     CLOSE get_;
+     RETURN VALUE_ IS NOT NULL;
+  END;
+
+  FUNCTION  Exist_Str  ( INSURANCE_ID_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN VARCHAR2 IS --Y/N
+  BEGIN
+      IF Exist( INSURANCE_ID_ ) THEN
+          RETURN 'Y';
+      END IF;
+      RETURN 'N';
+  END;
+
+  PROCEDURE Check_Exist( INSURANCE_ID_ IN PERSONS.INSURANCE_ID%TYPE ) IS
+  BEGIN
+      IF NOT Exist( INSURANCE_ID_ ) THEN
+          Error_Api.Record_Not_Exist( 'PERSONS_API', INSURANCE_ID_ );
+      END IF;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   ROWID_AND_LOCK  ---------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION Get_Rowid_And_Lock( rec_ IN OUT NOCOPY REC ) RETURN ROWID IS
+     rowid_ ROWID;
+
+     CURSOR get_ IS
+     SELECT ROWID
+       FROM PERSONS_TAB
+      WHERE INSURANCE_ID = rec_.INSURANCE_ID
+        FOR UPDATE WAIT 15;
+  BEGIN
+     IF rec_.INSURANCE_ID IS NULL THEN
+         Error_Api.Record_Not_Exist( 'PERSONS_API', rec_.INSURANCE_ID );
+     END IF;
+     BEGIN
+         OPEN get_;
+         FETCH get_ INTO rowid_;
+         CLOSE get_;
+     EXCEPTION WHEN OTHERS THEN
+         Error_Api.Record_Locked( 'PERSONS_API', rec_.INSURANCE_ID );
+     END;
+     IF rowid_ IS NULL THEN
+         Error_Api.Record_Not_Exist( 'PERSONS_API', rec_.INSURANCE_ID );
+     END IF;
+     RETURN rowid_;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   CLEAR/DEFAULT  ----------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Add_Default( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+     NULL;
+  END;
+
+  PROCEDURE Clear_Rec ( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      rec_ := NULL;
+  END;
+
+  PROCEDURE Clear_With_Default( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      Clear_Rec( rec_ );
+      Add_Default( rec_ );
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   CHECK_RECORD  -----------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Check_Not_Null( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+
+      IF rec_.ID IS NULL THEN
+          Error_Api.Column_Is_Null( 'PERSONS_API', 'ID' );
+      END IF;
+
+      IF rec_.INSURANCE_ID IS NULL THEN
+          Error_Api.Column_Is_Null( 'PERSONS_API', 'INSURANCE_ID' );
+      END IF;
+
+      IF rec_.LAST_NAME IS NULL THEN
+          Error_Api.Column_Is_Null( 'PERSONS_API', 'LAST_NAME' );
+      END IF;
+
+      IF rec_.FIRST_NAME IS NULL THEN
+          Error_Api.Column_Is_Null( 'PERSONS_API', 'FIRST_NAME' );
+      END IF;
+
+  END;
+
+  PROCEDURE Check_Reference( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+     NULL;
+  END;
+
+
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   NEW/MODIFY/REMOVE  ------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Get_New_Id( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+     SELECT PERSONS_SEQ.nextval INTO rec_.id FROM DUAL;
+  END;
+
+  PROCEDURE Fix_Columns_Format( rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+     NULL;
+  END;
+
+  PROCEDURE NEW   ( ID_                              IN PERSONS.ID%TYPE DEFAULT NULL, 
+                    INSURANCE_ID_                    IN PERSONS.INSURANCE_ID%TYPE DEFAULT NULL, 
+                    LAST_NAME_                       IN PERSONS.LAST_NAME%TYPE DEFAULT NULL, 
+                    FIRST_NAME_                      IN PERSONS.FIRST_NAME%TYPE DEFAULT NULL, 
+                    ADDRESS_                         IN PERSONS.ADDRESS%TYPE DEFAULT NULL, 
+                    CITY_                            IN PERSONS.CITY%TYPE DEFAULT NULL  ) IS
+      rec_ REC;
+  BEGIN
+      rec_.ID := ID_;
+      rec_.INSURANCE_ID := INSURANCE_ID_;
+      rec_.LAST_NAME := LAST_NAME_;
+      rec_.FIRST_NAME := FIRST_NAME_;
+      rec_.ADDRESS := ADDRESS_;
+      rec_.CITY := CITY_;
+      NEW( rec_ );
+  END;
+
+
+  PROCEDURE NEW   ( new_rec_ IN OUT NOCOPY REC ) IS
+      rowid_    rowid;
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( 'PERSONS_APT', 'New' );
+          Log( new_rec_, 'New' );
+      END IF;
+      Add_Default( new_rec_ );
+      Get_New_Id( new_rec_ );
+      Fix_Columns_Format( new_rec_ );
+      IF PERSONS_API.New_Pre( new_rec_ ) THEN
+
+          Check_Not_Null( new_rec_ );
+          Check_Reference( new_rec_ );
+
+          new_rec_.rowversion := SYSDATE;
+
+          BEGIN
+             INSERT INTO PERSONS_TAB
+             VALUES new_rec_
+             RETURNING ROWID into rowid_;
+
+             SELECT *
+               INTO new_rec_
+               FROM PERSONS_TAB
+              WHERE ROWID = rowid_;
+          EXCEPTION WHEN DUP_VAL_ON_INDEX THEN
+             Error_Api.Record_Exist( 'PERSONS_TAB', new_rec_.INSURANCE_ID );
+          END;
+
+          PERSONS_API.New_Post( new_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE Modify( new_rec_ IN OUT NOCOPY REC ) IS
+      old_rec_ REC;
+      rowid_   ROWID;
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( 'PERSONS_APT', 'Modify' );
+      END IF;
+      rowid_ := Get_Rowid_And_Lock( new_rec_ );
+      Fix_Columns_Format( new_rec_ );
+      old_rec_ := Get( new_rec_.INSURANCE_ID );
+      IF FND_Api.Log_Is_On THEN
+          Log_Diff( old_rec_, new_rec_, 'Modify' );
+      END IF;
+      IF PERSONS_API.Modify_Pre( old_rec_, new_rec_ ) THEN
+          Check_Not_Null( new_rec_ );
+          Check_Reference( new_rec_ );
+          IF new_rec_.rowversion != old_rec_.rowversion THEN
+             Error_Api.Record_Modified( 'PERSONS_API', new_rec_.INSURANCE_ID );
+          END IF;
+
+          new_rec_.rowversion := SYSDATE;
+
+          UPDATE PERSONS_TAB
+             SET ROW = new_rec_
+          WHERE ROWID = rowid_;
+
+          PERSONS_API.Modify_Post( old_rec_, new_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE New_Or_Modify( new_rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      IF new_rec_.id IS NULL THEN
+          New( new_rec_ );
+      ELSE
+          Modify( new_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE Remove( rem_rec_ IN OUT NOCOPY REC ) IS
+      rowid_   ROWID;
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( 'PERSONS_APT', 'Remove' );
+          Log( rem_rec_, 'Remove' );
+      END IF;
+      IF PERSONS_API.Remove_Pre( rem_rec_ ) THEN
+          rowid_ := Get_Rowid_And_Lock( rem_rec_ );
+
+          DELETE FROM PERSONS_TAB
+           WHERE ROWID = rowid_;
+
+          PERSONS_API.Remove_Post( rem_rec_ );
+      END IF;
+  END;
+
+  PROCEDURE Remove( INSURANCE_ID_ IN PERSONS.INSURANCE_ID%TYPE ) IS
+      rem_rec_ REC;
+  BEGIN
+      rem_rec_ := Get( INSURANCE_ID_ );
+      Remove( rem_rec_ );
+  END;
+
+  PROCEDURE CRUD( type_ IN VARCHAR2, rec_ IN OUT NOCOPY REC ) IS
+  BEGIN
+      IF FND_Api.Log_Is_On THEN
+          FND_Api.Log_Call_Method( 'PERSONS_APT', 'CRUD' );
+      END IF;
+      IF type_ in ('Create','Add') THEN
+          New( rec_ );
+      ELSIF type_ = 'Update' THEN
+          Modify( rec_ );
+      ELSIF type_ = 'Delete' THEN
+          Remove( rec_ );
+      END IF;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   LOG  --------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  PROCEDURE Log( rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL ) IS
+  BEGIN
+      IF NOT FND_Api.Log_Is_On THEN
+          RETURN;
+      END IF;
+      FND_Api.Log( '    --- PERSONS '||call_method_||' ----' );
+      FND_Api.Log( '    ID',  rec_.ID ); 
+      FND_Api.Log( '    INSURANCE_ID',  rec_.INSURANCE_ID ); 
+      FND_Api.Log( '    LAST_NAME',  rec_.LAST_NAME ); 
+      FND_Api.Log( '    FIRST_NAME',  rec_.FIRST_NAME ); 
+      FND_Api.Log( '    ADDRESS',  rec_.ADDRESS ); 
+      FND_Api.Log( '    CITY',  rec_.CITY ); 
+      FND_Api.Log( '    ROWVERSION',  rec_.ROWVERSION ); 
+  END;
+
+  PROCEDURE Log_Diff( old_rec_ IN OUT NOCOPY REC, new_rec_ IN OUT NOCOPY REC, call_method_ IN VARCHAR2 DEFAULT NULL) IS
+  BEGIN
+      IF NOT FND_Api.Log_Is_On THEN
+          RETURN;
+      END IF;
+      FND_Api.Log( '    --- DIFF: PERSONS '||call_method_||' ---' );
+      IF nvl(old_rec_.ID,'_') != nvl(new_rec_.ID,'_') THEN
+          FND_Api.Log( '    OLD: ID',  old_rec_.ID ); 
+          FND_Api.Log( '    NEW: ID',  new_rec_.ID ); 
+      END IF;
+      IF nvl(old_rec_.INSURANCE_ID,'_') != nvl(new_rec_.INSURANCE_ID,'_') THEN
+          FND_Api.Log( '    OLD: INSURANCE_ID',  old_rec_.INSURANCE_ID ); 
+          FND_Api.Log( '    NEW: INSURANCE_ID',  new_rec_.INSURANCE_ID ); 
+      END IF;
+      IF nvl(old_rec_.LAST_NAME,'_') != nvl(new_rec_.LAST_NAME,'_') THEN
+          FND_Api.Log( '    OLD: LAST_NAME',  old_rec_.LAST_NAME ); 
+          FND_Api.Log( '    NEW: LAST_NAME',  new_rec_.LAST_NAME ); 
+      END IF;
+      IF nvl(old_rec_.FIRST_NAME,'_') != nvl(new_rec_.FIRST_NAME,'_') THEN
+          FND_Api.Log( '    OLD: FIRST_NAME',  old_rec_.FIRST_NAME ); 
+          FND_Api.Log( '    NEW: FIRST_NAME',  new_rec_.FIRST_NAME ); 
+      END IF;
+      IF nvl(old_rec_.ADDRESS,'_') != nvl(new_rec_.ADDRESS,'_') THEN
+          FND_Api.Log( '    OLD: ADDRESS',  old_rec_.ADDRESS ); 
+          FND_Api.Log( '    NEW: ADDRESS',  new_rec_.ADDRESS ); 
+      END IF;
+      IF nvl(old_rec_.CITY,'_') != nvl(new_rec_.CITY,'_') THEN
+          FND_Api.Log( '    OLD: CITY',  old_rec_.CITY ); 
+          FND_Api.Log( '    NEW: CITY',  new_rec_.CITY ); 
+      END IF;
+      IF nvl(old_rec_.ROWVERSION,'_') != nvl(new_rec_.ROWVERSION,'_') THEN
+          FND_Api.Log( '    OLD: ROWVERSION',  old_rec_.ROWVERSION ); 
+          FND_Api.Log( '    NEW: ROWVERSION',  new_rec_.ROWVERSION ); 
+      END IF;
+  END;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   GET RECORD  -------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+  FUNCTION Get ( INSURANCE_ID_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN REC IS
+     rec_ REC;
+
+     CURSOR get_ IS
+     SELECT *
+       FROM PERSONS_TAB
+      WHERE INSURANCE_ID = INSURANCE_ID_;
+  BEGIN
+     OPEN get_;
+     FETCH get_ INTO rec_;
+     CLOSE get_;
+     RETURN rec_;
+  END;
+
+  FUNCTION Get_View( INSURANCE_ID_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN PERSONS%ROWTYPE IS
+     rec_ PERSONS%ROWTYPE;
+
+     CURSOR get_ IS
+     SELECT *
+       FROM PERSONS
+      WHERE INSURANCE_ID = INSURANCE_ID_;
+  BEGIN
+     OPEN get_;
+     FETCH get_ INTO rec_;
+     CLOSE get_;
+     RETURN rec_;
+  END;
+
+  FUNCTION Get_Rec( 
+                       id_                       IN PERSONS.ID%TYPE DEFAULT NULL,
+                       insurance_id_             IN PERSONS.INSURANCE_ID%TYPE DEFAULT NULL,
+                       last_name_                IN PERSONS.LAST_NAME%TYPE DEFAULT NULL,
+                       first_name_               IN PERSONS.FIRST_NAME%TYPE DEFAULT NULL,
+                       address_                  IN PERSONS.ADDRESS%TYPE DEFAULT NULL,
+                       city_                     IN PERSONS.CITY%TYPE DEFAULT NULL ) RETURN REC IS
+    sql_     VARCHAR2(32000);
+    cursor_  INTEGER;
+    result_  INTEGER;
+    rec_     REC;
+  BEGIN
+     cursor_ := DBMS_sql.open_cursor;
+     sql_ := 'SELECT * FROM PERSONS_TAB WHERE rownum = 1 ';
+
+     IF ID_ IS NOT NULL THEN
+         IF instr(ID_,'%') > 0 OR instr(ID_,'_') > 0 THEN
+             sql_ := sql_ || ' AND ID LIKE :ID_ ';
+         ELSE
+             sql_ := sql_ || ' AND ID = :ID_ ';
+         END IF;
+     END IF;
+     IF INSURANCE_ID_ IS NOT NULL THEN
+         IF instr(INSURANCE_ID_,'%') > 0 OR instr(INSURANCE_ID_,'_') > 0 THEN
+             sql_ := sql_ || ' AND INSURANCE_ID LIKE :INSURANCE_ID_ ';
+         ELSE
+             sql_ := sql_ || ' AND INSURANCE_ID = :INSURANCE_ID_ ';
+         END IF;
+     END IF;
+     IF LAST_NAME_ IS NOT NULL THEN
+         IF instr(LAST_NAME_,'%') > 0 OR instr(LAST_NAME_,'_') > 0 THEN
+             sql_ := sql_ || ' AND LAST_NAME LIKE :LAST_NAME_ ';
+         ELSE
+             sql_ := sql_ || ' AND LAST_NAME = :LAST_NAME_ ';
+         END IF;
+     END IF;
+     IF FIRST_NAME_ IS NOT NULL THEN
+         IF instr(FIRST_NAME_,'%') > 0 OR instr(FIRST_NAME_,'_') > 0 THEN
+             sql_ := sql_ || ' AND FIRST_NAME LIKE :FIRST_NAME_ ';
+         ELSE
+             sql_ := sql_ || ' AND FIRST_NAME = :FIRST_NAME_ ';
+         END IF;
+     END IF;
+     IF ADDRESS_ IS NOT NULL THEN
+         IF instr(ADDRESS_,'%') > 0 OR instr(ADDRESS_,'_') > 0 THEN
+             sql_ := sql_ || ' AND ADDRESS LIKE :ADDRESS_ ';
+         ELSE
+             sql_ := sql_ || ' AND ADDRESS = :ADDRESS_ ';
+         END IF;
+     END IF;
+     IF CITY_ IS NOT NULL THEN
+         IF instr(CITY_,'%') > 0 OR instr(CITY_,'_') > 0 THEN
+             sql_ := sql_ || ' AND CITY LIKE :CITY_ ';
+         ELSE
+             sql_ := sql_ || ' AND CITY = :CITY_ ';
+         END IF;
+     END IF;
+
+     DBMS_sql.parse( cursor_, sql_, DBMS_sql.native );
+
+     IF ID_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':ID_', ID_ );
+     END IF;
+     IF INSURANCE_ID_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':INSURANCE_ID_', INSURANCE_ID_ );
+     END IF;
+     IF LAST_NAME_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':LAST_NAME_', LAST_NAME_ );
+     END IF;
+     IF FIRST_NAME_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':FIRST_NAME_', FIRST_NAME_ );
+     END IF;
+     IF ADDRESS_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':ADDRESS_', ADDRESS_ );
+     END IF;
+     IF CITY_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':CITY_', CITY_ );
+     END IF;
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 1, rec_.ID);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 2, rec_.INSURANCE_ID);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 3, rec_.LAST_NAME, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 4, rec_.FIRST_NAME, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 5, rec_.ADDRESS, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 6, rec_.CITY, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 7, rec_.ROWVERSION);
+
+     result_ := DBMS_sql.execute( cursor_ );
+     IF DBMS_SQL.FETCH_ROWS(cursor_) > 0 THEN
+         DBMS_SQL.COLUMN_VALUE(cursor_, 1, rec_.ID);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 2, rec_.INSURANCE_ID);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 3, rec_.LAST_NAME);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 4, rec_.FIRST_NAME);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 5, rec_.ADDRESS);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 6, rec_.CITY);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 7, rec_.ROWVERSION);
+
+     END IF;
+     DBMS_sql.close_cursor( cursor_ );
+     RETURN rec_;
+  END;
+
+
+  FUNCTION Get_Recs( 
+                       id_                       IN PERSONS.ID%TYPE DEFAULT NULL,
+                       insurance_id_             IN PERSONS.INSURANCE_ID%TYPE DEFAULT NULL,
+                       last_name_                IN PERSONS.LAST_NAME%TYPE DEFAULT NULL,
+                       first_name_               IN PERSONS.FIRST_NAME%TYPE DEFAULT NULL,
+                       address_                  IN PERSONS.ADDRESS%TYPE DEFAULT NULL,
+                       city_                     IN PERSONS.CITY%TYPE DEFAULT NULL ) RETURN REC_TABLE IS
+    sql_     VARCHAR2(32000);
+    cursor_  INTEGER;
+    result_  INTEGER;
+    rec_     REC;
+    recs_    REC_TABLE;
+  BEGIN
+     cursor_ := DBMS_sql.open_cursor;
+     sql_ := 'SELECT * FROM PERSONS_TAB WHERE 1 = 1 ';
+
+     IF ID_ IS NOT NULL THEN
+         IF instr(ID_,'%') > 0 OR instr(ID_,'_') > 0 THEN
+             sql_ := sql_ || ' AND ID LIKE :ID_ ';
+         ELSE
+             sql_ := sql_ || ' AND ID = :ID_ ';
+         END IF;
+     END IF;
+     IF INSURANCE_ID_ IS NOT NULL THEN
+         IF instr(INSURANCE_ID_,'%') > 0 OR instr(INSURANCE_ID_,'_') > 0 THEN
+             sql_ := sql_ || ' AND INSURANCE_ID LIKE :INSURANCE_ID_ ';
+         ELSE
+             sql_ := sql_ || ' AND INSURANCE_ID = :INSURANCE_ID_ ';
+         END IF;
+     END IF;
+     IF LAST_NAME_ IS NOT NULL THEN
+         IF instr(LAST_NAME_,'%') > 0 OR instr(LAST_NAME_,'_') > 0 THEN
+             sql_ := sql_ || ' AND LAST_NAME LIKE :LAST_NAME_ ';
+         ELSE
+             sql_ := sql_ || ' AND LAST_NAME = :LAST_NAME_ ';
+         END IF;
+     END IF;
+     IF FIRST_NAME_ IS NOT NULL THEN
+         IF instr(FIRST_NAME_,'%') > 0 OR instr(FIRST_NAME_,'_') > 0 THEN
+             sql_ := sql_ || ' AND FIRST_NAME LIKE :FIRST_NAME_ ';
+         ELSE
+             sql_ := sql_ || ' AND FIRST_NAME = :FIRST_NAME_ ';
+         END IF;
+     END IF;
+     IF ADDRESS_ IS NOT NULL THEN
+         IF instr(ADDRESS_,'%') > 0 OR instr(ADDRESS_,'_') > 0 THEN
+             sql_ := sql_ || ' AND ADDRESS LIKE :ADDRESS_ ';
+         ELSE
+             sql_ := sql_ || ' AND ADDRESS = :ADDRESS_ ';
+         END IF;
+     END IF;
+     IF CITY_ IS NOT NULL THEN
+         IF instr(CITY_,'%') > 0 OR instr(CITY_,'_') > 0 THEN
+             sql_ := sql_ || ' AND CITY LIKE :CITY_ ';
+         ELSE
+             sql_ := sql_ || ' AND CITY = :CITY_ ';
+         END IF;
+     END IF;
+
+     DBMS_sql.parse( cursor_, sql_, DBMS_sql.native );
+
+     IF ID_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':ID_', ID_ );
+     END IF;
+     IF INSURANCE_ID_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':INSURANCE_ID_', INSURANCE_ID_ );
+     END IF;
+     IF LAST_NAME_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':LAST_NAME_', LAST_NAME_ );
+     END IF;
+     IF FIRST_NAME_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':FIRST_NAME_', FIRST_NAME_ );
+     END IF;
+     IF ADDRESS_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':ADDRESS_', ADDRESS_ );
+     END IF;
+     IF CITY_ IS NOT NULL THEN
+         DBMS_sql.bind_variable( cursor_, ':CITY_', CITY_ );
+     END IF;
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 1, rec_.ID);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 2, rec_.INSURANCE_ID);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 3, rec_.LAST_NAME, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 4, rec_.FIRST_NAME, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 5, rec_.ADDRESS, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 6, rec_.CITY, 255);
+     DBMS_SQL.DEFINE_COLUMN(cursor_, 7, rec_.ROWVERSION);
+
+     result_ := DBMS_sql.execute( cursor_ );
+     WHILE DBMS_SQL.FETCH_ROWS(cursor_) > 0 LOOP
+         rec_ := NULL;
+         DBMS_SQL.COLUMN_VALUE(cursor_, 1, rec_.ID);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 2, rec_.INSURANCE_ID);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 3, rec_.LAST_NAME);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 4, rec_.FIRST_NAME);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 5, rec_.ADDRESS);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 6, rec_.CITY);
+         DBMS_SQL.COLUMN_VALUE(cursor_, 7, rec_.ROWVERSION);
+
+         recs_( recs_.count+1 ) := rec_;
+     END LOOP;
+     DBMS_sql.close_cursor( cursor_ );
+     RETURN recs_;
+  END;
+
+
+
+end PERSONS_APT;
+/

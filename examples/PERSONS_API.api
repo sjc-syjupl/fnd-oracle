@@ -1,0 +1,17 @@
+create or replace package PERSONS_API is
+
+  FUNCTION  New_Pre ( rec_ IN OUT NOCOPY PERSONS_APT.REC ) RETURN BOOLEAN;
+  PROCEDURE New_Post( rec_ IN OUT NOCOPY PERSONS_APT.REC );
+
+  FUNCTION  Modify_Pre ( old_rec_ IN OUT NOCOPY PERSONS_APT.REC, new_rec_ IN OUT NOCOPY PERSONS_APT.REC ) RETURN BOOLEAN;
+  PROCEDURE Modify_Post( old_rec_ IN OUT NOCOPY PERSONS_APT.REC, new_rec_ IN OUT NOCOPY PERSONS_APT.REC );
+
+  FUNCTION  Remove_Pre ( rem_rec_ IN OUT NOCOPY PERSONS_APT.REC ) RETURN BOOLEAN;
+  PROCEDURE Remove_Post( rem_rec_ IN OUT NOCOPY PERSONS_APT.REC );
+
+  --------------------------------------------------------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+end PERSONS_API;
+/

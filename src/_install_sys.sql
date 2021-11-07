@@ -5,12 +5,12 @@
 DEFINE FND_USER           = FND_USER
 DEFINE LOCAL_PATH        = c:\Fnd\Oracle
 
+GRANT CREATE JOB TO &FND_USER;
+GRANT CREATE EXTERNAL JOB TO &FND_USER;
 GRANT execute ON sys.Dbms_LOCK TO &FND_USER  with grant option;
 GRANT execute ON sys.Dbms_Scheduler TO &FND_USER  with grant option;
 GRANT EXECUTE ON UTL_FILE TO &FND_USER;
 grant execute on utl_http  to &FND_USER;
-GRANT CREATE JOB TO &FND_USER;
-GRANT CREATE EXTERNAL JOB TO &FND_USER;
 GRANT SELECT ON scheduler$_event_log TO &FND_USER;
 GRANT SELECT ON dba_scheduler_running_jobs TO &FND_USER;
 

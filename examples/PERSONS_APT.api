@@ -1,0 +1,107 @@
+CREATE OR REPLACE PACKAGE PERSONS_APT IS
+
+    TYPE REC IS RECORD(
+       id                               PERSONS_TAB.ID%TYPE,
+       insurance_id                     PERSONS_TAB.INSURANCE_ID%TYPE,
+       last_name                        PERSONS_TAB.LAST_NAME%TYPE,
+       first_name                       PERSONS_TAB.FIRST_NAME%TYPE,
+       address                          PERSONS_TAB.ADDRESS%TYPE,
+       city                             PERSONS_TAB.CITY%TYPE,
+       rowversion                       PERSONS_TAB.ROWVERSION%TYPE    );
+    TYPE REC_TABLE IS TABLE OF REC INDEX BY PLS_INTEGER;
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   EXIST  ------------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    FUNCTION  Exist      ( insurance_id_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN BOOLEAN;
+    FUNCTION  Exist_Str  ( insurance_id_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN VARCHAR2; --Y/N
+    PROCEDURE Check_Exist( insurance_id_ IN PERSONS.INSURANCE_ID%TYPE );
+
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   GET RECORD --------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    FUNCTION Get     ( insurance_id_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN REC;
+    FUNCTION Get_View( insurance_id_ IN PERSONS.INSURANCE_ID%TYPE ) RETURN PERSONS%ROWTYPE;
+    FUNCTION Get_Rec ( 
+                       id_                       IN PERSONS.ID%TYPE DEFAULT NULL,
+                       insurance_id_             IN PERSONS.INSURANCE_ID%TYPE DEFAULT NULL,
+                       last_name_                IN PERSONS.LAST_NAME%TYPE DEFAULT NULL,
+                       first_name_               IN PERSONS.FIRST_NAME%TYPE DEFAULT NULL,
+                       address_                  IN PERSONS.ADDRESS%TYPE DEFAULT NULL,
+                       city_                     IN PERSONS.CITY%TYPE DEFAULT NULL ) RETURN REC;  -- one (first) record
+    FUNCTION Get_Recs( 
+                       id_                       IN PERSONS.ID%TYPE DEFAULT NULL,
+                       insurance_id_             IN PERSONS.INSURANCE_ID%TYPE DEFAULT NULL,
+                       last_name_                IN PERSONS.LAST_NAME%TYPE DEFAULT NULL,
+                       first_name_               IN PERSONS.FIRST_NAME%TYPE DEFAULT NULL,
+                       address_                  IN PERSONS.ADDRESS%TYPE DEFAULT NULL,
+                       city_                     IN PERSONS.CITY%TYPE DEFAULT NULL ) RETURN REC_TABLE;  -- table with records
+
+
+
+  --------------------------------------------------------------------------------------------------------------
+  -------------------------------   NEW / MODIFY / REMOVE  -----------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+    PROCEDURE CRUD         ( type_    IN VARCHAR2, rec_ IN OUT NOCOPY REC );  --type_  in (Add, Update, Delete)
+    PROCEDURE New          ( new_rec_ IN OUT NOCOPY REC );
+    PROCEDURE Modify       ( new_rec_ IN OUT NOCOPY REC );
+    PROCEDURE New_Or_Modify( new_rec_ IN OUT NOCOPY REC );
+    PROCEDURE Remove       ( rem_rec_ IN OUT NOCOPY REC );
+    PROCEDURE Remove       ( insurance_id_ IN PERSONS.INSURANCE_ID%TYPE );
+
+    PROCEDURE New ( ID_                              IN PERSONS.ID%TYPE DEFAULT NULL, 
+                    INSURANCE_ID_                    IN PERSONS.INSURANCE_ID%TYPE DEFAULT NULL, 
+                    LAST_NAME_                       IN PERSONS.LAST_NAME%TYPE DEFAULT NULL, 
+                    FIRST_NAME_                      IN PERSONS.FIRST_NAME%TYPE DEFAULT NULL, 
+                    ADDRESS_                         IN PERSONS.ADDRESS%TYPE DEFAULT NULL, 
+                    CITY_                            IN PERSONS.CITY%TYPE DEFAULT NULL );
+
+/*
+  --------------------------------------------------------------------------------------------------------------
+  ----------------------------------------   EXAMPLES  ---------------------------------------------------------
+  --------------------------------------------------------------------------------------------------------------
+
+
+
+SELECT ID                             "ID",
+       INSURANCE_ID                   "INSURANCE_ID",
+       LAST_NAME                      "LAST_NAME",
+       FIRST_NAME                     "FIRST_NAME",
+       ADDRESS                        "ADDRESS",
+       CITY                           "CITY"
+FROM IFSAPP.PERSONS
+
+DECLARE
+    rec_   IFSAPP.PERSONS_APT.REC;
+BEGIN
+    rec_ := IFSAPP.PERSONS_APT.Get_Rec( insurance_id_ => 'cos', last_name_ => 'cos2' );
+    rec_.ID := :ID;
+    rec_.INSURANCE_ID := :INSURANCE_ID;
+    rec_.LAST_NAME := :LAST_NAME;
+    rec_.FIRST_NAME := :FIRST_NAME;
+    rec_.ADDRESS := :ADDRESS;
+    rec_.CITY := :CITY;
+    rec_.ROWVERSION := IFSAPP.FND_Api.Str_To_Date(:ROWVERSION);
+    IFSAPP.PERSONS_APT.CRUD( :Type, rec_ );
+END;
+
+
+DECLARE
+    rec_   IFSAPP.PERSONS_APT.REC;
+BEGIN
+    rec_ := IFSAPP.PERSONS_APT.Get_Rec( insurance_id_ => 'cos', last_name_ => 'cos2' );
+    rec_.INSURANCE_ID := :INSURANCE_ID;
+    rec_.LAST_NAME := :LAST_NAME;
+    rec_.FIRST_NAME := :FIRST_NAME;
+    rec_.ADDRESS := :ADDRESS;
+    rec_.CITY := :CITY;
+    IFSAPP.PERSONS_APT.New_Or_Modify( rec_ );
+END;
+
+*/
+
+END PERSONS_APT;
+/
